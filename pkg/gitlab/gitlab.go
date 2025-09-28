@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xanzy/go-gitlab"
+	gitlab "gitlab.com/gitlab-org/api/client-go"
 )
 
 type Client struct {
@@ -160,7 +160,7 @@ func (c *Client) MergeMergeRequest(mrIID int) error {
 	return nil
 }
 
-func (c *Client) GetMergeRequestsByBranch(sourceBranch string) ([]*gitlab.MergeRequest, error) {
+func (c *Client) GetMergeRequestsByBranch(sourceBranch string) ([]*gitlab.BasicMergeRequest, error) {
 	mrs, _, err := c.client.MergeRequests.ListProjectMergeRequests(c.projectID, &gitlab.ListProjectMergeRequestsOptions{
 		SourceBranch: &sourceBranch,
 		State:        gitlab.Ptr("opened"),
