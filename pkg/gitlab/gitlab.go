@@ -12,6 +12,7 @@ import (
 type Client struct {
 	client    *gitlab.Client
 	projectID string
+	mrIID     int
 }
 
 type Label struct {
@@ -104,6 +105,7 @@ func (c *Client) CreateMergeRequest(sourceBranch, targetBranch, title, descripti
 		return nil, fmt.Errorf("failed to create merge request: %w", err)
 	}
 
+	c.mrIID = mr.IID
 	return mr, nil
 }
 
@@ -111,11 +113,9 @@ func (c *Client) WaitForPipeline(timeout time.Duration) (string, error) {
 	start := time.Now()
 
 	for time.Since(start) < timeout {
-		pipelines, _, err := c.client.Pipelines.ListProjectPipelines(c.projectID, &gitlab.ListProjectPipelinesOptions{
-			ListOptions: gitlab.ListOptions{PerPage: 1},
-		})
+		pipelines, _, err := c.client.MergeRequests.ListMergeRequestPipelines(c.projectID, c.mrIID, nil)
 		if err != nil {
-			return "", fmt.Errorf("failed to list pipelines: %w", err)
+			return "", fmt.Errorf("failed to list MR pipelines: %w", err)
 		}
 
 		if len(pipelines) == 0 {

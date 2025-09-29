@@ -12,10 +12,12 @@ import (
 )
 
 type Client struct {
-	client *github.Client
-	ctx    context.Context
-	owner  string
-	repo   string
+	client   *github.Client
+	ctx      context.Context
+	owner    string
+	repo     string
+	prNumber int
+	prSHA    string
 }
 
 type Label struct {
@@ -116,6 +118,8 @@ func (c *Client) CreatePullRequest(head, base, title, body string, assignees, re
 		}
 	}
 
+	c.prNumber = *pr.Number
+	c.prSHA = *pr.Head.SHA
 	return pr, nil
 }
 
@@ -123,32 +127,41 @@ func (c *Client) WaitForWorkflows(timeout time.Duration) (string, error) {
 	start := time.Now()
 
 	for time.Since(start) < timeout {
-		runs, _, err := c.client.Actions.ListRepositoryWorkflowRuns(c.ctx, c.owner, c.repo, &github.ListWorkflowRunsOptions{
-			ListOptions: github.ListOptions{PerPage: 1},
+		checkRuns, _, err := c.client.Checks.ListCheckRunsForRef(c.ctx, c.owner, c.repo, c.prSHA, &github.ListCheckRunsOptions{
+			ListOptions: github.ListOptions{PerPage: 100},
 		})
 		if err != nil {
-			return "", fmt.Errorf("failed to list workflow runs: %w", err)
+			return "", fmt.Errorf("failed to list check runs: %w", err)
 		}
 
-		if len(runs.WorkflowRuns) == 0 {
+		if checkRuns.GetTotal() == 0 {
 			time.Sleep(5 * time.Second)
 			continue
 		}
 
-		run := runs.WorkflowRuns[0]
-		status := *run.Status
+		allCompleted := true
+		overallConclusion := "success"
 
-		if status == "in_progress" || status == "queued" {
-			fmt.Printf("Workflow is still %s...\n", status)
+		for _, check := range checkRuns.CheckRuns {
+			status := check.GetStatus()
+			if status == "in_progress" || status == "queued" {
+				allCompleted = false
+				fmt.Printf("Check '%s' is still %s...\n", check.GetName(), status)
+				break
+			}
+
+			conclusion := check.GetConclusion()
+			if conclusion != "success" && conclusion != "skipped" && conclusion != "neutral" {
+				overallConclusion = conclusion
+			}
+		}
+
+		if !allCompleted {
 			time.Sleep(5 * time.Second)
 			continue
 		}
 
-		if run.Conclusion != nil {
-			return *run.Conclusion, nil
-		}
-
-		return status, nil
+		return overallConclusion, nil
 	}
 
 	return "", fmt.Errorf("timeout waiting for workflow completion")
