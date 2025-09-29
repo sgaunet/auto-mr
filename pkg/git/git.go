@@ -247,7 +247,7 @@ func (r *Repository) PushBranch(branchName string) error {
 	return nil
 }
 
-// SwitchBranch checks out the specified branch.
+// SwitchBranch checks out the specified branch, allowing unstaged changes.
 func (r *Repository) SwitchBranch(branchName string) error {
 	worktree, err := r.repo.Worktree()
 	if err != nil {
@@ -256,6 +256,7 @@ func (r *Repository) SwitchBranch(branchName string) error {
 
 	err = worktree.Checkout(&git.CheckoutOptions{
 		Branch: plumbing.NewBranchReferenceName(branchName),
+		Force:  true,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to checkout branch: %w", err)
