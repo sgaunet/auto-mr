@@ -17,6 +17,7 @@ var (
 	errTokenRequired      = errors.New("GITHUB_TOKEN environment variable is required")
 	errInvalidURLFormat   = errors.New("invalid GitHub URL format")
 	errWorkflowTimeout    = errors.New("timeout waiting for workflow completion")
+	errPRNotFound         = errors.New("no pull request found for branch")
 )
 
 const (
@@ -148,14 +149,10 @@ func (c *Client) CreatePullRequest(
 		}
 	}
 
-	// Add reviewers if provided
+	// Add reviewers if provided (filter out PR author)
 	if len(reviewers) > 0 {
-		reviewRequest := github.ReviewersRequest{
-			Reviewers: reviewers,
-		}
-		_, _, err = c.client.PullRequests.RequestReviewers(c.ctx(), c.owner, c.repo, *pr.Number, reviewRequest)
-		if err != nil {
-			return nil, fmt.Errorf("failed to add reviewers: %w", err)
+		if err := c.addReviewers(pr, reviewers); err != nil {
+			return nil, err
 		}
 	}
 
@@ -167,6 +164,27 @@ func (c *Client) CreatePullRequest(
 		}
 	}
 
+	c.prNumber = *pr.Number
+	c.prSHA = *pr.Head.SHA
+	return pr, nil
+}
+
+// GetPullRequestByBranch fetches an existing pull request by head and base branches.
+func (c *Client) GetPullRequestByBranch(head, base string) (*github.PullRequest, error) {
+	prs, _, err := c.client.PullRequests.List(c.ctx(), c.owner, c.repo, &github.PullRequestListOptions{
+		State: "open",
+		Head:  fmt.Sprintf("%s:%s", c.owner, head),
+		Base:  base,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list pull requests: %w", err)
+	}
+
+	if len(prs) == 0 {
+		return nil, fmt.Errorf("%w: %s", errPRNotFound, head)
+	}
+
+	pr := prs[0]
 	c.prNumber = *pr.Number
 	c.prSHA = *pr.Head.SHA
 	return pr, nil
@@ -243,6 +261,28 @@ func (c *Client) DeleteBranch(branch string) error {
 // ctx returns the context for API calls.
 func (c *Client) ctx() context.Context {
 	return context.Background()
+}
+
+// addReviewers adds reviewers to a pull request, filtering out the PR author.
+func (c *Client) addReviewers(pr *github.PullRequest, reviewers []string) error {
+	prAuthor := pr.User.GetLogin()
+	filteredReviewers := make([]string, 0, len(reviewers))
+	for _, reviewer := range reviewers {
+		if reviewer != prAuthor {
+			filteredReviewers = append(filteredReviewers, reviewer)
+		}
+	}
+
+	if len(filteredReviewers) > 0 {
+		reviewRequest := github.ReviewersRequest{
+			Reviewers: filteredReviewers,
+		}
+		_, _, err := c.client.PullRequests.RequestReviewers(c.ctx(), c.owner, c.repo, *pr.Number, reviewRequest)
+		if err != nil {
+			return fmt.Errorf("failed to add reviewers: %w", err)
+		}
+	}
+	return nil
 }
 
 // processCheckRuns evaluates check run statuses and returns completion state and overall conclusion.

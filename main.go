@@ -217,6 +217,19 @@ func createGitLabMR(
 		cfg.GitLab.Assignee, cfg.GitLab.Reviewer, labels,
 	)
 	if err != nil {
+		// Check if error is about MR already existing
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "already exists") ||
+			strings.Contains(errMsg, "Another open merge request already exists") {
+			fmt.Printf("Warning: Merge request already exists for branch %s\n", currentBranch)
+			// Fetch the existing MR
+			existingMR, fetchErr := client.GetMergeRequestByBranch(currentBranch, mainBranch)
+			if fetchErr != nil {
+				return nil, fmt.Errorf("failed to fetch existing merge request: %w", fetchErr)
+			}
+			fmt.Printf("Using existing merge request: %s\n", existingMR.WebURL)
+			return existingMR, nil
+		}
 		return nil, fmt.Errorf("failed to create merge request: %w", err)
 	}
 
@@ -325,6 +338,17 @@ func createGitHubPR(
 		labels,
 	)
 	if err != nil {
+		// Check if error is about PR already existing
+		if strings.Contains(err.Error(), "pull request already exists") {
+			fmt.Printf("Warning: Pull request already exists for branch %s\n", currentBranch)
+			// Fetch the existing PR
+			existingPR, fetchErr := client.GetPullRequestByBranch(currentBranch, mainBranch)
+			if fetchErr != nil {
+				return nil, fmt.Errorf("failed to fetch existing pull request: %w", fetchErr)
+			}
+			fmt.Printf("Using existing pull request: %s\n", *existingPR.HTMLURL)
+			return existingPR, nil
+		}
 		return nil, fmt.Errorf("failed to create pull request: %w", err)
 	}
 

@@ -18,6 +18,7 @@ var (
 	errAssigneeNotFound  = errors.New("failed to find assignee user")
 	errReviewerNotFound  = errors.New("failed to find reviewer user")
 	errPipelineTimeout   = errors.New("timeout waiting for pipeline completion")
+	errMRNotFound        = errors.New("no merge request found for branch")
 )
 
 const (
@@ -149,6 +150,31 @@ func (c *Client) CreateMergeRequest(
 	mr, _, err := c.client.MergeRequests.CreateMergeRequest(c.projectID, createOptions)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create merge request: %w", err)
+	}
+
+	c.mrIID = mr.IID
+	return mr, nil
+}
+
+// GetMergeRequestByBranch fetches an existing merge request by source and target branches.
+func (c *Client) GetMergeRequestByBranch(sourceBranch, targetBranch string) (*gitlab.MergeRequest, error) {
+	mrs, _, err := c.client.MergeRequests.ListProjectMergeRequests(c.projectID, &gitlab.ListProjectMergeRequestsOptions{
+		State:        gitlab.Ptr("opened"),
+		SourceBranch: &sourceBranch,
+		TargetBranch: &targetBranch,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list merge requests: %w", err)
+	}
+
+	if len(mrs) == 0 {
+		return nil, fmt.Errorf("%w: %s", errMRNotFound, sourceBranch)
+	}
+
+	// Get full MR details
+	mr, _, err := c.client.MergeRequests.GetMergeRequest(c.projectID, mrs[0].IID, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get merge request details: %w", err)
 	}
 
 	c.mrIID = mr.IID
