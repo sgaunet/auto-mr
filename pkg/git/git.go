@@ -27,6 +27,17 @@ var (
 	errNoSSHKeys            = errors.New("no SSH keys found in ~/.ssh")
 )
 
+// noAuthMethod represents no authentication (returns nil).
+type noAuthMethod struct{}
+
+func (n *noAuthMethod) Name() string   { return "none" }
+func (n *noAuthMethod) String() string { return "none" }
+
+// authMethod wraps transport.AuthMethod to provide a concrete return type.
+type authMethod struct {
+	method transport.AuthMethod
+}
+
 // Repository wraps a go-git repository with additional functionality.
 type Repository struct {
 	repo *git.Repository
@@ -55,11 +66,19 @@ func OpenRepository(path string) (*Repository, error) {
 		return nil, fmt.Errorf("failed to setup authentication: %w", err)
 	}
 
-	return &Repository{repo: repo, auth: auth}, nil
+	// Convert authMethod to transport.AuthMethod (nil for noAuthMethod)
+	var finalAuth transport.AuthMethod
+	if auth != nil && auth.method != nil {
+		if _, isNoAuth := auth.method.(*noAuthMethod); !isNoAuth {
+			finalAuth = auth.method
+		}
+	}
+
+	return &Repository{repo: repo, auth: finalAuth}, nil
 }
 
 // getAuth determines the appropriate authentication method based on the remote URL.
-func getAuth(repo *git.Repository) (transport.AuthMethod, error) {
+func getAuth(repo *git.Repository) (*authMethod, error) {
 	remote, err := repo.Remote("origin")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get origin remote: %w", err)
@@ -74,22 +93,7 @@ func getAuth(repo *git.Repository) (transport.AuthMethod, error) {
 
 	// Check if it's an HTTPS URL and if tokens are available
 	if strings.HasPrefix(url, "https://") {
-		if strings.Contains(url, "gitlab.com") {
-			if token := os.Getenv("GITLAB_TOKEN"); token != "" {
-				return &http.BasicAuth{
-					Username: "oauth2",
-					Password: token,
-				}, nil
-			}
-		} else if strings.Contains(url, "github.com") {
-			if token := os.Getenv("GITHUB_TOKEN"); token != "" {
-				return &http.BasicAuth{
-					Username: "x-access-token",
-					Password: token,
-				}, nil
-			}
-		}
-		return nil, nil // No token available, try without auth
+		return getHTTPSAuth(url)
 	}
 
 	// For SSH URLs, setup SSH authentication
@@ -97,11 +101,31 @@ func getAuth(repo *git.Repository) (transport.AuthMethod, error) {
 		return setupSSHAuth()
 	}
 
-	return nil, nil // No authentication needed
+	return &authMethod{method: &noAuthMethod{}}, nil // No authentication needed
+}
+
+// getHTTPSAuth returns HTTP authentication for HTTPS URLs.
+func getHTTPSAuth(url string) (*authMethod, error) {
+	if strings.Contains(url, "gitlab.com") {
+		if token := os.Getenv("GITLAB_TOKEN"); token != "" {
+			return &authMethod{method: &http.BasicAuth{
+				Username: "oauth2",
+				Password: token,
+			}}, nil
+		}
+	} else if strings.Contains(url, "github.com") {
+		if token := os.Getenv("GITHUB_TOKEN"); token != "" {
+			return &authMethod{method: &http.BasicAuth{
+				Username: "x-access-token",
+				Password: token,
+			}}, nil
+		}
+	}
+	return &authMethod{method: &noAuthMethod{}}, nil // No token available, try without auth
 }
 
 // setupSSHAuth configures SSH authentication using the user's SSH keys.
-func setupSSHAuth() (transport.AuthMethod, error) {
+func setupSSHAuth() (*authMethod, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get home directory: %w", err)
@@ -133,7 +157,7 @@ func setupSSHAuth() (transport.AuthMethod, error) {
 				}
 			}
 
-			return sshAuth, nil
+			return &authMethod{method: sshAuth}, nil
 		}
 	}
 

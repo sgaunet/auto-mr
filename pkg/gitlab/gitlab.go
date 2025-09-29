@@ -61,27 +61,7 @@ func (c *Client) SetProjectFromURL(url string) error {
 	// - git@gitlab.com:user/project.git
 	url = strings.TrimSuffix(url, ".git")
 
-	var projectPath string
-	if strings.HasPrefix(url, "git@") || strings.HasPrefix(url, "ssh://git@") {
-		// SSH format: git@gitlab.com:user/project or ssh://git@gitlab.com/user/project
-		parts := strings.Split(url, ":")
-		if len(parts) >= minURLParts {
-			projectPath = parts[len(parts)-1]
-		} else {
-			// Handle ssh:// format
-			parts = strings.Split(url, "/")
-			if len(parts) >= minURLParts {
-				projectPath = strings.Join(parts[len(parts)-minURLParts:], "/")
-			}
-		}
-	} else {
-		// HTTPS format
-		parts := strings.Split(url, "/")
-		if len(parts) >= minURLParts {
-			projectPath = strings.Join(parts[len(parts)-minURLParts:], "/")
-		}
-	}
-
+	projectPath := extractProjectPath(url)
 	if projectPath == "" {
 		return errInvalidURLFormat
 	}
@@ -94,6 +74,29 @@ func (c *Client) SetProjectFromURL(url string) error {
 
 	c.projectID = strconv.Itoa(project.ID)
 	return nil
+}
+
+// extractProjectPath extracts the project path from a git URL.
+func extractProjectPath(url string) string {
+	if strings.HasPrefix(url, "git@") || strings.HasPrefix(url, "ssh://git@") {
+		// SSH format: git@gitlab.com:user/project or ssh://git@gitlab.com/user/project
+		parts := strings.Split(url, ":")
+		if len(parts) >= minURLParts {
+			return parts[len(parts)-1]
+		}
+		// Handle ssh:// format
+		parts = strings.Split(url, "/")
+		if len(parts) >= minURLParts {
+			return strings.Join(parts[len(parts)-minURLParts:], "/")
+		}
+	} else {
+		// HTTPS format
+		parts := strings.Split(url, "/")
+		if len(parts) >= minURLParts {
+			return strings.Join(parts[len(parts)-minURLParts:], "/")
+		}
+	}
+	return ""
 }
 
 // ListLabels returns all labels for the project.

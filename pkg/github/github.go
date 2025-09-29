@@ -67,27 +67,7 @@ func (c *Client) SetRepositoryFromURL(url string) error {
 	// - git@github.com:owner/repo.git
 	url = strings.TrimSuffix(url, ".git")
 
-	var ownerRepo string
-	if strings.HasPrefix(url, "git@") || strings.HasPrefix(url, "ssh://git@") {
-		// SSH format: git@github.com:owner/repo or ssh://git@github.com/owner/repo
-		parts := strings.Split(url, ":")
-		if len(parts) >= minURLParts {
-			ownerRepo = parts[len(parts)-1]
-		} else {
-			// Handle ssh:// format
-			parts = strings.Split(url, "/")
-			if len(parts) >= minURLParts {
-				ownerRepo = strings.Join(parts[len(parts)-2:], "/")
-			}
-		}
-	} else {
-		// HTTPS format
-		parts := strings.Split(url, "/")
-		if len(parts) >= minURLParts {
-			ownerRepo = strings.Join(parts[len(parts)-2:], "/")
-		}
-	}
-
+	ownerRepo := extractOwnerRepo(url)
 	if ownerRepo == "" {
 		return errInvalidURLFormat
 	}
@@ -107,6 +87,29 @@ func (c *Client) SetRepositoryFromURL(url string) error {
 	}
 
 	return nil
+}
+
+// extractOwnerRepo extracts the owner/repo path from a git URL.
+func extractOwnerRepo(url string) string {
+	if strings.HasPrefix(url, "git@") || strings.HasPrefix(url, "ssh://git@") {
+		// SSH format: git@github.com:owner/repo or ssh://git@github.com/owner/repo
+		parts := strings.Split(url, ":")
+		if len(parts) >= minURLParts {
+			return parts[len(parts)-1]
+		}
+		// Handle ssh:// format
+		parts = strings.Split(url, "/")
+		if len(parts) >= minURLParts {
+			return strings.Join(parts[len(parts)-2:], "/")
+		}
+	} else {
+		// HTTPS format
+		parts := strings.Split(url, "/")
+		if len(parts) >= minURLParts {
+			return strings.Join(parts[len(parts)-2:], "/")
+		}
+	}
+	return ""
 }
 
 // ListLabels returns all labels for the repository.
