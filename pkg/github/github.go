@@ -61,15 +61,43 @@ func NewClient() (*Client, error) {
 // SetRepositoryFromURL sets the repository from a git remote URL.
 func (c *Client) SetRepositoryFromURL(url string) error {
 	// Extract owner/repo from URL
-	// e.g., https://github.com/owner/repo.git -> owner/repo
+	// Supports both HTTPS and SSH formats:
+	// - https://github.com/owner/repo.git
+	// - git@github.com:owner/repo.git
 	url = strings.TrimSuffix(url, ".git")
-	parts := strings.Split(url, "/")
-	if len(parts) < minURLParts {
+
+	var ownerRepo string
+	if strings.HasPrefix(url, "git@") || strings.HasPrefix(url, "ssh://git@") {
+		// SSH format: git@github.com:owner/repo or ssh://git@github.com/owner/repo
+		parts := strings.Split(url, ":")
+		if len(parts) >= minURLParts {
+			ownerRepo = parts[len(parts)-1]
+		} else {
+			// Handle ssh:// format
+			parts = strings.Split(url, "/")
+			if len(parts) >= minURLParts {
+				ownerRepo = strings.Join(parts[len(parts)-2:], "/")
+			}
+		}
+	} else {
+		// HTTPS format
+		parts := strings.Split(url, "/")
+		if len(parts) >= minURLParts {
+			ownerRepo = strings.Join(parts[len(parts)-2:], "/")
+		}
+	}
+
+	if ownerRepo == "" {
 		return errInvalidURLFormat
 	}
 
-	c.owner = parts[len(parts)-2]
-	c.repo = parts[len(parts)-1]
+	parts := strings.Split(ownerRepo, "/")
+	if len(parts) != minURLParts {
+		return errInvalidURLFormat
+	}
+
+	c.owner = parts[0]
+	c.repo = parts[1]
 
 	// Validate repository exists
 	_, _, err := c.client.Repositories.Get(c.ctx(), c.owner, c.repo)

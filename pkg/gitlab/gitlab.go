@@ -55,14 +55,35 @@ func NewClient() (*Client, error) {
 // SetProjectFromURL sets the project from a git remote URL.
 func (c *Client) SetProjectFromURL(url string) error {
 	// Extract project path from URL
-	// e.g., https://gitlab.com/user/project.git -> user/project
+	// Supports both HTTPS and SSH formats:
+	// - https://gitlab.com/user/project.git
+	// - git@gitlab.com:user/project.git
 	url = strings.TrimSuffix(url, ".git")
-	parts := strings.Split(url, "/")
-	if len(parts) < minURLParts {
-		return errInvalidURLFormat
+
+	var projectPath string
+	if strings.HasPrefix(url, "git@") || strings.HasPrefix(url, "ssh://git@") {
+		// SSH format: git@gitlab.com:user/project or ssh://git@gitlab.com/user/project
+		parts := strings.Split(url, ":")
+		if len(parts) >= minURLParts {
+			projectPath = parts[len(parts)-1]
+		} else {
+			// Handle ssh:// format
+			parts = strings.Split(url, "/")
+			if len(parts) >= minURLParts {
+				projectPath = strings.Join(parts[len(parts)-minURLParts:], "/")
+			}
+		}
+	} else {
+		// HTTPS format
+		parts := strings.Split(url, "/")
+		if len(parts) >= minURLParts {
+			projectPath = strings.Join(parts[len(parts)-minURLParts:], "/")
+		}
 	}
 
-	projectPath := strings.Join(parts[len(parts)-minURLParts:], "/")
+	if projectPath == "" {
+		return errInvalidURLFormat
+	}
 
 	// Get project info to validate and get project ID
 	project, _, err := c.client.Projects.GetProject(projectPath, nil)
