@@ -1,0 +1,32 @@
+# https://taskfile.dev
+version: '3'
+vars:
+  BINFILE: auto-mr
+
+tasks:
+  default:
+    desc: "List all tasks"
+    cmds:
+      - task -a
+
+  build:
+    desc: "Build the binary"
+    cmds:
+      - go mod download
+      - CGO_ENABLED=0 go build .
+
+  linter:
+    desc: "Run linter"
+    cmds:
+      - golangci-lint run
+
+  snapshot:
+    desc: "Create a snapshot release"
+    cmds:
+      - GITLAB_TOKEN="" goreleaser --clean --snapshot
+
+  release:
+    desc: "Create a release"
+    cmds:
+      - GITLAB_TOKEN="" goreleaser --clean
+  
