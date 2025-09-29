@@ -241,7 +241,7 @@ func (r *Repository) PushBranch(branchName string) error {
 		},
 		Auth: r.auth,
 	})
-	if err != nil {
+	if err != nil && !errors.Is(err, git.NoErrAlreadyUpToDate) {
 		return fmt.Errorf("failed to push branch: %w", err)
 	}
 	return nil
