@@ -33,7 +33,7 @@ func Load() (*Config, error) {
 
 	data, err := os.ReadFile(configPath)
 	if err != nil {
-		return nil, fmt.Errorf("config file not found: %s\nPlease create the config file with the following format:\ngitlab:\n  assignee: \n  reviewer:\ngithub:\n  assignee: \n  reviewer:", configPath)
+		return nil, fmt.Errorf("config file not found: %s", configPath)
 	}
 
 	var config Config

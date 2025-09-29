@@ -11,19 +11,26 @@ import (
 	"golang.org/x/oauth2"
 )
 
+// Client represents a GitHub API client wrapper
 type Client struct {
 	client   *github.Client
-	ctx      context.Context
 	owner    string
 	repo     string
 	prNumber int
 	prSHA    string
 }
 
+// ctx returns the context for API calls
+func (c *Client) ctx() context.Context {
+	return context.Background()
+}
+
+// Label represents a GitHub label
 type Label struct {
 	Name string
 }
 
+// NewClient creates a new GitHub client
 func NewClient() (*Client, error) {
 	token := os.Getenv("GITHUB_TOKEN")
 	if token == "" {
@@ -39,10 +46,10 @@ func NewClient() (*Client, error) {
 
 	return &Client{
 		client: client,
-		ctx:    ctx,
 	}, nil
 }
 
+// SetRepositoryFromURL sets the repository from a git remote URL
 func (c *Client) SetRepositoryFromURL(url string) error {
 	// Extract owner/repo from URL
 	// e.g., https://github.com/owner/repo.git -> owner/repo
@@ -56,7 +63,7 @@ func (c *Client) SetRepositoryFromURL(url string) error {
 	c.repo = parts[len(parts)-1]
 
 	// Validate repository exists
-	_, _, err := c.client.Repositories.Get(c.ctx, c.owner, c.repo)
+	_, _, err := c.client.Repositories.Get(c.ctx(), c.owner, c.repo)
 	if err != nil {
 		return fmt.Errorf("failed to get repository information: %w", err)
 	}
@@ -64,8 +71,9 @@ func (c *Client) SetRepositoryFromURL(url string) error {
 	return nil
 }
 
+// ListLabels returns all labels for the repository
 func (c *Client) ListLabels() ([]*Label, error) {
-	labels, _, err := c.client.Issues.ListLabels(c.ctx, c.owner, c.repo, nil)
+	labels, _, err := c.client.Issues.ListLabels(c.ctx(), c.owner, c.repo, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list labels: %w", err)
 	}
@@ -78,6 +86,7 @@ func (c *Client) ListLabels() ([]*Label, error) {
 	return result, nil
 }
 
+// CreatePullRequest creates a new pull request with assignees, reviewers, and labels
 func (c *Client) CreatePullRequest(head, base, title, body string, assignees, reviewers, labels []string) (*github.PullRequest, error) {
 	newPR := &github.NewPullRequest{
 		Title: github.Ptr(title),
@@ -86,14 +95,14 @@ func (c *Client) CreatePullRequest(head, base, title, body string, assignees, re
 		Body:  github.Ptr(body),
 	}
 
-	pr, _, err := c.client.PullRequests.Create(c.ctx, c.owner, c.repo, newPR)
+	pr, _, err := c.client.PullRequests.Create(c.ctx(), c.owner, c.repo, newPR)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create pull request: %w", err)
 	}
 
 	// Add assignees if provided
 	if len(assignees) > 0 {
-		_, _, err = c.client.Issues.AddAssignees(c.ctx, c.owner, c.repo, *pr.Number, assignees)
+		_, _, err = c.client.Issues.AddAssignees(c.ctx(), c.owner, c.repo, *pr.Number, assignees)
 		if err != nil {
 			return nil, fmt.Errorf("failed to add assignees: %w", err)
 		}
@@ -104,7 +113,7 @@ func (c *Client) CreatePullRequest(head, base, title, body string, assignees, re
 		reviewRequest := github.ReviewersRequest{
 			Reviewers: reviewers,
 		}
-		_, _, err = c.client.PullRequests.RequestReviewers(c.ctx, c.owner, c.repo, *pr.Number, reviewRequest)
+		_, _, err = c.client.PullRequests.RequestReviewers(c.ctx(), c.owner, c.repo, *pr.Number, reviewRequest)
 		if err != nil {
 			return nil, fmt.Errorf("failed to add reviewers: %w", err)
 		}
@@ -112,7 +121,7 @@ func (c *Client) CreatePullRequest(head, base, title, body string, assignees, re
 
 	// Add labels if provided
 	if len(labels) > 0 {
-		_, _, err = c.client.Issues.AddLabelsToIssue(c.ctx, c.owner, c.repo, *pr.Number, labels)
+		_, _, err = c.client.Issues.AddLabelsToIssue(c.ctx(), c.owner, c.repo, *pr.Number, labels)
 		if err != nil {
 			return nil, fmt.Errorf("failed to add labels: %w", err)
 		}
@@ -123,11 +132,12 @@ func (c *Client) CreatePullRequest(head, base, title, body string, assignees, re
 	return pr, nil
 }
 
+// WaitForWorkflows waits for all workflow runs to complete for the pull request
 func (c *Client) WaitForWorkflows(timeout time.Duration) (string, error) {
 	start := time.Now()
 
 	for time.Since(start) < timeout {
-		checkRuns, _, err := c.client.Checks.ListCheckRunsForRef(c.ctx, c.owner, c.repo, c.prSHA, &github.ListCheckRunsOptions{
+		checkRuns, _, err := c.client.Checks.ListCheckRunsForRef(c.ctx(), c.owner, c.repo, c.prSHA, &github.ListCheckRunsOptions{
 			ListOptions: github.ListOptions{PerPage: 100},
 		})
 		if err != nil {
@@ -167,12 +177,13 @@ func (c *Client) WaitForWorkflows(timeout time.Duration) (string, error) {
 	return "", fmt.Errorf("timeout waiting for workflow completion")
 }
 
+// MergePullRequest merges a pull request using the specified merge method
 func (c *Client) MergePullRequest(prNumber int, mergeMethod string) error {
 	options := &github.PullRequestOptions{
 		MergeMethod: mergeMethod, // "squash", "merge", or "rebase"
 	}
 
-	_, _, err := c.client.PullRequests.Merge(c.ctx, c.owner, c.repo, prNumber, "", options)
+	_, _, err := c.client.PullRequests.Merge(c.ctx(), c.owner, c.repo, prNumber, "", options)
 	if err != nil {
 		return fmt.Errorf("failed to merge pull request: %w", err)
 	}
@@ -180,8 +191,9 @@ func (c *Client) MergePullRequest(prNumber int, mergeMethod string) error {
 	return nil
 }
 
+// GetPullRequestsByHead returns all open pull requests for the given head branch
 func (c *Client) GetPullRequestsByHead(head string) ([]*github.PullRequest, error) {
-	prs, _, err := c.client.PullRequests.List(c.ctx, c.owner, c.repo, &github.PullRequestListOptions{
+	prs, _, err := c.client.PullRequests.List(c.ctx(), c.owner, c.repo, &github.PullRequestListOptions{
 		Head:  fmt.Sprintf("%s:%s", c.owner, head),
 		State: "open",
 	})
@@ -192,8 +204,9 @@ func (c *Client) GetPullRequestsByHead(head string) ([]*github.PullRequest, erro
 	return prs, nil
 }
 
+// DeleteBranch deletes a branch from the remote repository
 func (c *Client) DeleteBranch(branch string) error {
-	_, err := c.client.Git.DeleteRef(c.ctx, c.owner, c.repo, fmt.Sprintf("heads/%s", branch))
+	_, err := c.client.Git.DeleteRef(c.ctx(), c.owner, c.repo, fmt.Sprintf("heads/%s", branch))
 	if err != nil {
 		return fmt.Errorf("failed to delete branch: %w", err)
 	}

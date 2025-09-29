@@ -184,7 +184,7 @@ func handleGitLab(cfg *config.Config, currentBranch, mainBranch, title, body str
 	// Merge MR
 	fmt.Println("Merging merge request...")
 	if err := client.MergeMergeRequest(mr.IID); err != nil {
-		return fmt.Errorf("failed to merge merge request: %w", err)
+		return fmt.Errorf("failed to merge MR: %w", err)
 	}
 
 	// Cleanup
