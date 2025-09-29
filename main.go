@@ -26,11 +26,10 @@ const (
 )
 
 var (
-	errOnMainBranch     = errors.New("you are on the main branch. Please checkout to a feature branch")
-	errStagedChanges    = errors.New("there are changes in the staged area. Please commit them")
+	errOnMainBranch        = errors.New("you are on the main branch. Please checkout to a feature branch")
 	errUnsupportedPlatform = errors.New("unsupported platform")
-	errPipelineFailed   = errors.New("pipeline failed")
-	errWorkflowFailed   = errors.New("workflow failed")
+	errPipelineFailed      = errors.New("pipeline failed")
+	errWorkflowFailed      = errors.New("workflow failed")
 )
 
 var rootCmd = &cobra.Command{
@@ -105,15 +104,6 @@ func validateBranches(repo *git.Repository) (string, string, error) {
 
 	if currentBranch == mainBranch {
 		return "", "", errOnMainBranch
-	}
-
-	hasStagedChanges, err := repo.HasStagedChanges()
-	if err != nil {
-		return "", "", fmt.Errorf("failed to check staged changes: %w", err)
-	}
-
-	if hasStagedChanges {
-		return "", "", errStagedChanges
 	}
 
 	return mainBranch, currentBranch, nil

@@ -4,12 +4,18 @@ package git
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v5/plumbing/transport"
+	"github.com/go-git/go-git/v5/plumbing/transport/http"
+	"github.com/go-git/go-git/v5/plumbing/transport/ssh"
+	"golang.org/x/crypto/ssh/knownhosts"
 )
 
 var (
@@ -18,11 +24,13 @@ var (
 	errNoRemoteURLs         = errors.New("no URLs found for origin remote")
 	errUnsupportedPlatform  = errors.New("repository is not hosted on GitLab or GitHub")
 	errStopIteration        = errors.New("stop iteration")
+	errNoSSHKeys            = errors.New("no SSH keys found in ~/.ssh")
 )
 
 // Repository wraps a go-git repository with additional functionality.
 type Repository struct {
 	repo *git.Repository
+	auth transport.AuthMethod
 }
 
 // Platform represents a git hosting platform.
@@ -42,7 +50,94 @@ func OpenRepository(path string) (*Repository, error) {
 		return nil, fmt.Errorf("failed to open git repository: %w", err)
 	}
 
-	return &Repository{repo: repo}, nil
+	auth, err := getAuth(repo)
+	if err != nil {
+		return nil, fmt.Errorf("failed to setup authentication: %w", err)
+	}
+
+	return &Repository{repo: repo, auth: auth}, nil
+}
+
+// getAuth determines the appropriate authentication method based on the remote URL.
+func getAuth(repo *git.Repository) (transport.AuthMethod, error) {
+	remote, err := repo.Remote("origin")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get origin remote: %w", err)
+	}
+
+	urls := remote.Config().URLs
+	if len(urls) == 0 {
+		return nil, errNoRemoteURLs
+	}
+
+	url := urls[0]
+
+	// Check if it's an HTTPS URL and if tokens are available
+	if strings.HasPrefix(url, "https://") {
+		if strings.Contains(url, "gitlab.com") {
+			if token := os.Getenv("GITLAB_TOKEN"); token != "" {
+				return &http.BasicAuth{
+					Username: "oauth2",
+					Password: token,
+				}, nil
+			}
+		} else if strings.Contains(url, "github.com") {
+			if token := os.Getenv("GITHUB_TOKEN"); token != "" {
+				return &http.BasicAuth{
+					Username: "x-access-token",
+					Password: token,
+				}, nil
+			}
+		}
+		return nil, nil // No token available, try without auth
+	}
+
+	// For SSH URLs, setup SSH authentication
+	if strings.HasPrefix(url, "git@") || strings.HasPrefix(url, "ssh://") {
+		return setupSSHAuth()
+	}
+
+	return nil, nil // No authentication needed
+}
+
+// setupSSHAuth configures SSH authentication using the user's SSH keys.
+func setupSSHAuth() (transport.AuthMethod, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get home directory: %w", err)
+	}
+
+	// Try common SSH key files
+	keyFiles := []string{
+		filepath.Join(homeDir, ".ssh", "id_rsa"),
+		filepath.Join(homeDir, ".ssh", "id_ed25519"),
+		filepath.Join(homeDir, ".ssh", "id_ecdsa"),
+	}
+
+	var sshAuth *ssh.PublicKeys
+	for _, keyFile := range keyFiles {
+		if _, err := os.Stat(keyFile); err == nil {
+			// #nosec G304 - Reading SSH keys from standard locations is intentional
+			sshAuth, err = ssh.NewPublicKeysFromFile("git", keyFile, "")
+			if err != nil {
+				// Try next key file if this one fails
+				continue
+			}
+
+			// Setup known_hosts callback
+			knownHostsPath := filepath.Join(homeDir, ".ssh", "known_hosts")
+			if _, err := os.Stat(knownHostsPath); err == nil {
+				callback, err := knownhosts.New(knownHostsPath)
+				if err == nil {
+					sshAuth.HostKeyCallback = callback
+				}
+			}
+
+			return sshAuth, nil
+		}
+	}
+
+	return nil, errNoSSHKeys
 }
 
 // GetMainBranch determines the main branch name (main or master).
@@ -52,7 +147,9 @@ func (r *Repository) GetMainBranch() (string, error) {
 		return "", fmt.Errorf("failed to get origin remote: %w", err)
 	}
 
-	refs, err := remote.List(&git.ListOptions{})
+	refs, err := remote.List(&git.ListOptions{
+		Auth: r.auth,
+	})
 	if err != nil {
 		return "", fmt.Errorf("failed to list remote references: %w", err)
 	}
@@ -142,6 +239,7 @@ func (r *Repository) PushBranch(branchName string) error {
 		RefSpecs: []config.RefSpec{
 			config.RefSpec("refs/heads/" + branchName + ":refs/heads/" + branchName),
 		},
+		Auth: r.auth,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to push branch: %w", err)
@@ -174,6 +272,7 @@ func (r *Repository) Pull() error {
 
 	err = worktree.Pull(&git.PullOptions{
 		RemoteName: "origin",
+		Auth:       r.auth,
 	})
 	if err != nil && !errors.Is(err, git.NoErrAlreadyUpToDate) {
 		return fmt.Errorf("failed to pull: %w", err)
@@ -195,6 +294,7 @@ func (r *Repository) FetchAndPrune() error {
 	err := r.repo.Fetch(&git.FetchOptions{
 		RemoteName: "origin",
 		Prune:      true,
+		Auth:       r.auth,
 	})
 	if err != nil && !errors.Is(err, git.NoErrAlreadyUpToDate) {
 		return fmt.Errorf("failed to fetch and prune: %w", err)
