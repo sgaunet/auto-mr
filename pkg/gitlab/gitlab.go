@@ -1,31 +1,47 @@
+// Package gitlab provides GitLab API client operations.
 package gitlab
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	gitlab "gitlab.com/gitlab-org/api/client-go"
 )
 
-// Client represents a GitLab API client wrapper
+var (
+	errTokenRequired     = errors.New("GITLAB_TOKEN environment variable is required")
+	errInvalidURLFormat  = errors.New("invalid GitLab URL format")
+	errAssigneeNotFound  = errors.New("failed to find assignee user")
+	errReviewerNotFound  = errors.New("failed to find reviewer user")
+	errPipelineTimeout   = errors.New("timeout waiting for pipeline completion")
+)
+
+const (
+	minURLParts         = 2
+	pipelinePollInterval = 5 * time.Second
+)
+
+// Client represents a GitLab API client wrapper.
 type Client struct {
 	client    *gitlab.Client
 	projectID string
 	mrIID     int
 }
 
-// Label represents a GitLab label
+// Label represents a GitLab label.
 type Label struct {
 	Name string
 }
 
-// NewClient creates a new GitLab client
+// NewClient creates a new GitLab client.
 func NewClient() (*Client, error) {
 	token := os.Getenv("GITLAB_TOKEN")
 	if token == "" {
-		return nil, fmt.Errorf("GITLAB_TOKEN environment variable is required")
+		return nil, errTokenRequired
 	}
 
 	client, err := gitlab.NewClient(token)
@@ -36,17 +52,17 @@ func NewClient() (*Client, error) {
 	return &Client{client: client}, nil
 }
 
-// SetProjectFromURL sets the project from a git remote URL
+// SetProjectFromURL sets the project from a git remote URL.
 func (c *Client) SetProjectFromURL(url string) error {
 	// Extract project path from URL
 	// e.g., https://gitlab.com/user/project.git -> user/project
 	url = strings.TrimSuffix(url, ".git")
 	parts := strings.Split(url, "/")
-	if len(parts) < 2 {
-		return fmt.Errorf("invalid GitLab URL format")
+	if len(parts) < minURLParts {
+		return errInvalidURLFormat
 	}
 
-	projectPath := strings.Join(parts[len(parts)-2:], "/")
+	projectPath := strings.Join(parts[len(parts)-minURLParts:], "/")
 
 	// Get project info to validate and get project ID
 	project, _, err := c.client.Projects.GetProject(projectPath, nil)
@@ -54,11 +70,11 @@ func (c *Client) SetProjectFromURL(url string) error {
 		return fmt.Errorf("failed to get project information: %w", err)
 	}
 
-	c.projectID = fmt.Sprintf("%d", project.ID)
+	c.projectID = strconv.Itoa(project.ID)
 	return nil
 }
 
-// ListLabels returns all labels for the project
+// ListLabels returns all labels for the project.
 func (c *Client) ListLabels() ([]*Label, error) {
 	labels, _, err := c.client.Labels.ListLabels(c.projectID, nil)
 	if err != nil {
@@ -73,21 +89,24 @@ func (c *Client) ListLabels() ([]*Label, error) {
 	return result, nil
 }
 
-// CreateMergeRequest creates a new merge request with assignees, reviewers, and labels
-func (c *Client) CreateMergeRequest(sourceBranch, targetBranch, title, description string, assignee, reviewer string, labels []string) (*gitlab.MergeRequest, error) {
+// CreateMergeRequest creates a new merge request with assignees, reviewers, and labels.
+func (c *Client) CreateMergeRequest(
+	sourceBranch, targetBranch, title, description, assignee, reviewer string,
+	labels []string,
+) (*gitlab.MergeRequest, error) {
 	// Get user IDs for assignee and reviewer
 	assigneeUser, _, err := c.client.Users.ListUsers(&gitlab.ListUsersOptions{
 		Username: &assignee,
 	})
 	if err != nil || len(assigneeUser) == 0 {
-		return nil, fmt.Errorf("failed to find assignee user: %s", assignee)
+		return nil, fmt.Errorf("%w: %s", errAssigneeNotFound, assignee)
 	}
 
 	reviewerUser, _, err := c.client.Users.ListUsers(&gitlab.ListUsersOptions{
 		Username: &reviewer,
 	})
 	if err != nil || len(reviewerUser) == 0 {
-		return nil, fmt.Errorf("failed to find reviewer user: %s", reviewer)
+		return nil, fmt.Errorf("%w: %s", errReviewerNotFound, reviewer)
 	}
 
 	assigneeID := assigneeUser[0].ID
@@ -115,7 +134,7 @@ func (c *Client) CreateMergeRequest(sourceBranch, targetBranch, title, descripti
 	return mr, nil
 }
 
-// WaitForPipeline waits for all pipelines to complete for the merge request
+// WaitForPipeline waits for all pipelines to complete for the merge request.
 func (c *Client) WaitForPipeline(timeout time.Duration) (string, error) {
 	start := time.Now()
 
@@ -126,7 +145,7 @@ func (c *Client) WaitForPipeline(timeout time.Duration) (string, error) {
 		}
 
 		if len(pipelines) == 0 {
-			time.Sleep(5 * time.Second)
+			time.Sleep(pipelinePollInterval)
 			continue
 		}
 
@@ -135,17 +154,17 @@ func (c *Client) WaitForPipeline(timeout time.Duration) (string, error) {
 
 		if status == "running" || status == "pending" || status == "created" {
 			fmt.Printf("Pipeline is still %s...\n", status)
-			time.Sleep(5 * time.Second)
+			time.Sleep(pipelinePollInterval)
 			continue
 		}
 
 		return status, nil
 	}
 
-	return "", fmt.Errorf("timeout waiting for pipeline completion")
+	return "", errPipelineTimeout
 }
 
-// ApproveMergeRequest approves a merge request
+// ApproveMergeRequest approves a merge request.
 func (c *Client) ApproveMergeRequest(mrIID int) error {
 	_, _, err := c.client.MergeRequestApprovals.ApproveMergeRequest(c.projectID, mrIID, nil)
 	if err != nil {
@@ -154,7 +173,7 @@ func (c *Client) ApproveMergeRequest(mrIID int) error {
 	return nil
 }
 
-// MergeMergeRequest merges a merge request
+// MergeMergeRequest merges a merge request.
 func (c *Client) MergeMergeRequest(mrIID int) error {
 	mergeOptions := &gitlab.AcceptMergeRequestOptions{
 		Squash:             gitlab.Ptr(true),
@@ -169,7 +188,7 @@ func (c *Client) MergeMergeRequest(mrIID int) error {
 	return nil
 }
 
-// GetMergeRequestsByBranch returns all open merge requests for the given source branch
+// GetMergeRequestsByBranch returns all open merge requests for the given source branch.
 func (c *Client) GetMergeRequestsByBranch(sourceBranch string) ([]*gitlab.BasicMergeRequest, error) {
 	mrs, _, err := c.client.MergeRequests.ListProjectMergeRequests(c.projectID, &gitlab.ListProjectMergeRequestsOptions{
 		SourceBranch: &sourceBranch,

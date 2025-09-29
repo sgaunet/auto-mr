@@ -1,7 +1,9 @@
+// Package github provides GitHub API client operations.
 package github
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -11,7 +13,19 @@ import (
 	"golang.org/x/oauth2"
 )
 
-// Client represents a GitHub API client wrapper
+var (
+	errTokenRequired      = errors.New("GITHUB_TOKEN environment variable is required")
+	errInvalidURLFormat   = errors.New("invalid GitHub URL format")
+	errWorkflowTimeout    = errors.New("timeout waiting for workflow completion")
+)
+
+const (
+	minURLParts          = 2
+	maxCheckRunsPerPage  = 100
+	checkPollInterval    = 5 * time.Second
+)
+
+// Client represents a GitHub API client wrapper.
 type Client struct {
 	client   *github.Client
 	owner    string
@@ -20,21 +34,16 @@ type Client struct {
 	prSHA    string
 }
 
-// ctx returns the context for API calls
-func (c *Client) ctx() context.Context {
-	return context.Background()
-}
-
-// Label represents a GitHub label
+// Label represents a GitHub label.
 type Label struct {
 	Name string
 }
 
-// NewClient creates a new GitHub client
+// NewClient creates a new GitHub client.
 func NewClient() (*Client, error) {
 	token := os.Getenv("GITHUB_TOKEN")
 	if token == "" {
-		return nil, fmt.Errorf("GITHUB_TOKEN environment variable is required")
+		return nil, errTokenRequired
 	}
 
 	ctx := context.Background()
@@ -49,14 +58,14 @@ func NewClient() (*Client, error) {
 	}, nil
 }
 
-// SetRepositoryFromURL sets the repository from a git remote URL
+// SetRepositoryFromURL sets the repository from a git remote URL.
 func (c *Client) SetRepositoryFromURL(url string) error {
 	// Extract owner/repo from URL
 	// e.g., https://github.com/owner/repo.git -> owner/repo
 	url = strings.TrimSuffix(url, ".git")
 	parts := strings.Split(url, "/")
-	if len(parts) < 2 {
-		return fmt.Errorf("invalid GitHub URL format")
+	if len(parts) < minURLParts {
+		return errInvalidURLFormat
 	}
 
 	c.owner = parts[len(parts)-2]
@@ -71,7 +80,7 @@ func (c *Client) SetRepositoryFromURL(url string) error {
 	return nil
 }
 
-// ListLabels returns all labels for the repository
+// ListLabels returns all labels for the repository.
 func (c *Client) ListLabels() ([]*Label, error) {
 	labels, _, err := c.client.Issues.ListLabels(c.ctx(), c.owner, c.repo, nil)
 	if err != nil {
@@ -86,8 +95,11 @@ func (c *Client) ListLabels() ([]*Label, error) {
 	return result, nil
 }
 
-// CreatePullRequest creates a new pull request with assignees, reviewers, and labels
-func (c *Client) CreatePullRequest(head, base, title, body string, assignees, reviewers, labels []string) (*github.PullRequest, error) {
+// CreatePullRequest creates a new pull request with assignees, reviewers, and labels.
+func (c *Client) CreatePullRequest(
+	head, base, title, body string,
+	assignees, reviewers, labels []string,
+) (*github.PullRequest, error) {
 	newPR := &github.NewPullRequest{
 		Title: github.Ptr(title),
 		Head:  github.Ptr(head),
@@ -132,52 +144,39 @@ func (c *Client) CreatePullRequest(head, base, title, body string, assignees, re
 	return pr, nil
 }
 
-// WaitForWorkflows waits for all workflow runs to complete for the pull request
+// WaitForWorkflows waits for all workflow runs to complete for the pull request.
 func (c *Client) WaitForWorkflows(timeout time.Duration) (string, error) {
 	start := time.Now()
 
 	for time.Since(start) < timeout {
-		checkRuns, _, err := c.client.Checks.ListCheckRunsForRef(c.ctx(), c.owner, c.repo, c.prSHA, &github.ListCheckRunsOptions{
-			ListOptions: github.ListOptions{PerPage: 100},
-		})
+		checkRuns, _, err := c.client.Checks.ListCheckRunsForRef(
+			c.ctx(), c.owner, c.repo, c.prSHA,
+			&github.ListCheckRunsOptions{
+				ListOptions: github.ListOptions{PerPage: maxCheckRunsPerPage},
+			},
+		)
 		if err != nil {
 			return "", fmt.Errorf("failed to list check runs: %w", err)
 		}
 
 		if checkRuns.GetTotal() == 0 {
-			time.Sleep(5 * time.Second)
+			time.Sleep(checkPollInterval)
 			continue
 		}
 
-		allCompleted := true
-		overallConclusion := "success"
-
-		for _, check := range checkRuns.CheckRuns {
-			status := check.GetStatus()
-			if status == "in_progress" || status == "queued" {
-				allCompleted = false
-				fmt.Printf("Check '%s' is still %s...\n", check.GetName(), status)
-				break
-			}
-
-			conclusion := check.GetConclusion()
-			if conclusion != "success" && conclusion != "skipped" && conclusion != "neutral" {
-				overallConclusion = conclusion
-			}
-		}
-
+		allCompleted, conclusion := c.processCheckRuns(checkRuns.CheckRuns)
 		if !allCompleted {
-			time.Sleep(5 * time.Second)
+			time.Sleep(checkPollInterval)
 			continue
 		}
 
-		return overallConclusion, nil
+		return conclusion, nil
 	}
 
-	return "", fmt.Errorf("timeout waiting for workflow completion")
+	return "", errWorkflowTimeout
 }
 
-// MergePullRequest merges a pull request using the specified merge method
+// MergePullRequest merges a pull request using the specified merge method.
 func (c *Client) MergePullRequest(prNumber int, mergeMethod string) error {
 	options := &github.PullRequestOptions{
 		MergeMethod: mergeMethod, // "squash", "merge", or "rebase"
@@ -191,7 +190,7 @@ func (c *Client) MergePullRequest(prNumber int, mergeMethod string) error {
 	return nil
 }
 
-// GetPullRequestsByHead returns all open pull requests for the given head branch
+// GetPullRequestsByHead returns all open pull requests for the given head branch.
 func (c *Client) GetPullRequestsByHead(head string) ([]*github.PullRequest, error) {
 	prs, _, err := c.client.PullRequests.List(c.ctx(), c.owner, c.repo, &github.PullRequestListOptions{
 		Head:  fmt.Sprintf("%s:%s", c.owner, head),
@@ -204,11 +203,38 @@ func (c *Client) GetPullRequestsByHead(head string) ([]*github.PullRequest, erro
 	return prs, nil
 }
 
-// DeleteBranch deletes a branch from the remote repository
+// DeleteBranch deletes a branch from the remote repository.
 func (c *Client) DeleteBranch(branch string) error {
-	_, err := c.client.Git.DeleteRef(c.ctx(), c.owner, c.repo, fmt.Sprintf("heads/%s", branch))
+	_, err := c.client.Git.DeleteRef(c.ctx(), c.owner, c.repo, "heads/"+branch)
 	if err != nil {
 		return fmt.Errorf("failed to delete branch: %w", err)
 	}
 	return nil
+}
+
+// ctx returns the context for API calls.
+func (c *Client) ctx() context.Context {
+	return context.Background()
+}
+
+// processCheckRuns evaluates check run statuses and returns completion state and overall conclusion.
+func (c *Client) processCheckRuns(checks []*github.CheckRun) (bool, string) {
+	allCompleted := true
+	conclusion := "success"
+
+	for _, check := range checks {
+		status := check.GetStatus()
+		if status == "in_progress" || status == "queued" {
+			allCompleted = false
+			fmt.Printf("Check '%s' is still %s...\n", check.GetName(), status)
+			break
+		}
+
+		checkConclusion := check.GetConclusion()
+		if checkConclusion != "success" && checkConclusion != "skipped" && checkConclusion != "neutral" {
+			conclusion = checkConclusion
+		}
+	}
+
+	return allCompleted, conclusion
 }

@@ -1,6 +1,8 @@
+// Package git provides git repository operations using go-git library.
 package git
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -10,17 +12,30 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
+var (
+	errMainBranchNotFound   = errors.New("could not determine main branch")
+	errHEADNotBranch        = errors.New("HEAD is not pointing to a branch")
+	errNoRemoteURLs         = errors.New("no URLs found for origin remote")
+	errUnsupportedPlatform  = errors.New("repository is not hosted on GitLab or GitHub")
+	errStopIteration        = errors.New("stop iteration")
+)
+
+// Repository wraps a go-git repository with additional functionality.
 type Repository struct {
 	repo *git.Repository
 }
 
+// Platform represents a git hosting platform.
 type Platform string
 
 const (
+	// PlatformGitLab represents GitLab hosting.
 	PlatformGitLab Platform = "gitlab"
+	// PlatformGitHub represents GitHub hosting.
 	PlatformGitHub Platform = "github"
 )
 
+// OpenRepository opens a git repository at the given path.
 func OpenRepository(path string) (*Repository, error) {
 	repo, err := git.PlainOpen(path)
 	if err != nil {
@@ -30,6 +45,7 @@ func OpenRepository(path string) (*Repository, error) {
 	return &Repository{repo: repo}, nil
 }
 
+// GetMainBranch determines the main branch name (main or master).
 func (r *Repository) GetMainBranch() (string, error) {
 	remote, err := r.repo.Remote("origin")
 	if err != nil {
@@ -58,14 +74,10 @@ func (r *Repository) GetMainBranch() (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("could not determine main branch")
+	return "", errMainBranchNotFound
 }
 
-func (r *Repository) branchExists(branchName string) bool {
-	_, err := r.repo.Reference(plumbing.NewBranchReferenceName(branchName), true)
-	return err == nil
-}
-
+// GetCurrentBranch returns the name of the currently checked out branch.
 func (r *Repository) GetCurrentBranch() (string, error) {
 	head, err := r.repo.Head()
 	if err != nil {
@@ -73,12 +85,13 @@ func (r *Repository) GetCurrentBranch() (string, error) {
 	}
 
 	if !head.Name().IsBranch() {
-		return "", fmt.Errorf("HEAD is not pointing to a branch")
+		return "", errHEADNotBranch
 	}
 
 	return head.Name().Short(), nil
 }
 
+// HasStagedChanges checks if there are any staged changes in the repository.
 func (r *Repository) HasStagedChanges() (bool, error) {
 	worktree, err := r.repo.Worktree()
 	if err != nil {
@@ -99,6 +112,7 @@ func (r *Repository) HasStagedChanges() (bool, error) {
 	return false, nil
 }
 
+// DetectPlatform determines if the repository is hosted on GitLab or GitHub.
 func (r *Repository) DetectPlatform() (Platform, error) {
 	remote, err := r.repo.Remote("origin")
 	if err != nil {
@@ -107,7 +121,7 @@ func (r *Repository) DetectPlatform() (Platform, error) {
 
 	urls := remote.Config().URLs
 	if len(urls) == 0 {
-		return "", fmt.Errorf("no URLs found for origin remote")
+		return "", errNoRemoteURLs
 	}
 
 	url := urls[0]
@@ -118,51 +132,77 @@ func (r *Repository) DetectPlatform() (Platform, error) {
 		return PlatformGitHub, nil
 	}
 
-	return "", fmt.Errorf("repository is not hosted on GitLab or GitHub")
+	return "", errUnsupportedPlatform
 }
 
+// PushBranch pushes the specified branch to the origin remote.
 func (r *Repository) PushBranch(branchName string) error {
-	return r.repo.Push(&git.PushOptions{
+	err := r.repo.Push(&git.PushOptions{
 		RemoteName: "origin",
 		RefSpecs: []config.RefSpec{
 			config.RefSpec("refs/heads/" + branchName + ":refs/heads/" + branchName),
 		},
 	})
+	if err != nil {
+		return fmt.Errorf("failed to push branch: %w", err)
+	}
+	return nil
 }
 
+// SwitchBranch checks out the specified branch.
 func (r *Repository) SwitchBranch(branchName string) error {
 	worktree, err := r.repo.Worktree()
 	if err != nil {
 		return fmt.Errorf("failed to get worktree: %w", err)
 	}
 
-	return worktree.Checkout(&git.CheckoutOptions{
+	err = worktree.Checkout(&git.CheckoutOptions{
 		Branch: plumbing.NewBranchReferenceName(branchName),
 	})
+	if err != nil {
+		return fmt.Errorf("failed to checkout branch: %w", err)
+	}
+	return nil
 }
 
+// Pull fetches and merges changes from the remote tracking branch.
 func (r *Repository) Pull() error {
 	worktree, err := r.repo.Worktree()
 	if err != nil {
 		return fmt.Errorf("failed to get worktree: %w", err)
 	}
 
-	return worktree.Pull(&git.PullOptions{
+	err = worktree.Pull(&git.PullOptions{
 		RemoteName: "origin",
 	})
+	if err != nil && !errors.Is(err, git.NoErrAlreadyUpToDate) {
+		return fmt.Errorf("failed to pull: %w", err)
+	}
+	return nil
 }
 
+// DeleteBranch deletes the specified local branch.
 func (r *Repository) DeleteBranch(branchName string) error {
-	return r.repo.Storer.RemoveReference(plumbing.NewBranchReferenceName(branchName))
+	err := r.repo.Storer.RemoveReference(plumbing.NewBranchReferenceName(branchName))
+	if err != nil {
+		return fmt.Errorf("failed to delete branch: %w", err)
+	}
+	return nil
 }
 
+// FetchAndPrune fetches from origin and prunes deleted remote branches.
 func (r *Repository) FetchAndPrune() error {
-	return r.repo.Fetch(&git.FetchOptions{
+	err := r.repo.Fetch(&git.FetchOptions{
 		RemoteName: "origin",
 		Prune:      true,
 	})
+	if err != nil && !errors.Is(err, git.NoErrAlreadyUpToDate) {
+		return fmt.Errorf("failed to fetch and prune: %w", err)
+	}
+	return nil
 }
 
+// GetLatestCommitMessage returns the commit message of the current HEAD.
 func (r *Repository) GetLatestCommitMessage() (string, error) {
 	head, err := r.repo.Head()
 	if err != nil {
@@ -177,6 +217,7 @@ func (r *Repository) GetLatestCommitMessage() (string, error) {
 	return commit.Message, nil
 }
 
+// GetCommitsSinceMain returns all commits on the current branch since it diverged from main.
 func (r *Repository) GetCommitsSinceMain(mainBranch string) ([]*object.Commit, error) {
 	currentHead, err := r.repo.Head()
 	if err != nil {
@@ -199,19 +240,20 @@ func (r *Repository) GetCommitsSinceMain(mainBranch string) ([]*object.Commit, e
 	var commits []*object.Commit
 	err = commitIter.ForEach(func(commit *object.Commit) error {
 		if commit.Hash == mainRef.Hash() {
-			return fmt.Errorf("stop iteration") // Found the main branch commit
+			return errStopIteration // Found the main branch commit
 		}
 		commits = append(commits, commit)
 		return nil
 	})
 
-	if err != nil && err.Error() != "stop iteration" {
+	if err != nil && !errors.Is(err, errStopIteration) {
 		return nil, fmt.Errorf("failed to iterate commits: %w", err)
 	}
 
 	return commits, nil
 }
 
+// GetRemoteURL returns the URL of the specified remote.
 func (r *Repository) GetRemoteURL(remoteName string) (string, error) {
 	remote, err := r.repo.Remote(remoteName)
 	if err != nil {
@@ -220,8 +262,13 @@ func (r *Repository) GetRemoteURL(remoteName string) (string, error) {
 
 	urls := remote.Config().URLs
 	if len(urls) == 0 {
-		return "", fmt.Errorf("no URLs found for remote %s", remoteName)
+		return "", fmt.Errorf("%w for remote %s", errNoRemoteURLs, remoteName)
 	}
 
 	return urls[0], nil
+}
+
+func (r *Repository) branchExists(branchName string) bool {
+	_, err := r.repo.Reference(plumbing.NewBranchReferenceName(branchName), true)
+	return err == nil
 }
