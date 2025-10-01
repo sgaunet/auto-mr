@@ -4,10 +4,12 @@ package main
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/sgaunet/auto-mr/internal/logger"
 	"github.com/sgaunet/auto-mr/internal/ui"
 	"github.com/sgaunet/auto-mr/pkg/config"
 	"github.com/sgaunet/auto-mr/pkg/git"
@@ -32,6 +34,11 @@ var (
 	errWorkflowFailed      = errors.New("workflow failed")
 )
 
+var (
+	logLevel string
+	log      *slog.Logger
+)
+
 var rootCmd = &cobra.Command{
 	Use:   "auto-mr",
 	Short: "Automated merge request tool for GitLab and GitHub",
@@ -46,6 +53,11 @@ and branch cleanup.`,
 	},
 }
 
+func init() {
+	rootCmd.PersistentFlags().StringVarP(&logLevel, "log-level", "l", "info",
+		"Set log level (debug, info, warn, error)")
+}
+
 func main() {
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -54,17 +66,20 @@ func main() {
 }
 
 func runAutoMR() error {
-	fmt.Println("auto-mr starting...")
+	log = logger.NewLogger(logLevel)
+	log.Info("auto-mr starting...")
 
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("failed to load configuration: %w", err)
 	}
+	log.Debug("Configuration loaded successfully")
 
 	repo, err := git.OpenRepository(".")
 	if err != nil {
 		return fmt.Errorf("failed to open git repository: %w", err)
 	}
+	repo.SetLogger(log)
 
 	mainBranch, currentBranch, err := validateBranches(repo)
 	if err != nil {
@@ -75,7 +90,7 @@ func runAutoMR() error {
 	if err != nil {
 		return fmt.Errorf("failed to detect platform: %w", err)
 	}
-	fmt.Printf("Platform: %s\n", platform)
+	log.Info("Platform detected", "platform", platform)
 
 	if err := prepareRepository(repo, currentBranch); err != nil {
 		return err
@@ -94,13 +109,13 @@ func validateBranches(repo *git.Repository) (string, string, error) {
 	if err != nil {
 		return "", "", fmt.Errorf("failed to get main branch: %w", err)
 	}
-	fmt.Printf("Main branch: %s\n", mainBranch)
+	log.Info("Main branch identified", "branch", mainBranch)
 
 	currentBranch, err := repo.GetCurrentBranch()
 	if err != nil {
 		return "", "", fmt.Errorf("failed to get current branch: %w", err)
 	}
-	fmt.Printf("Current branch: %s\n", currentBranch)
+	log.Info("Current branch", "branch", currentBranch)
 
 	if currentBranch == mainBranch {
 		return "", "", errOnMainBranch
@@ -110,10 +125,11 @@ func validateBranches(repo *git.Repository) (string, string, error) {
 }
 
 func prepareRepository(repo *git.Repository, currentBranch string) error {
-	fmt.Printf("Pushing branch %s...\n", currentBranch)
+	log.Info("Pushing branch", "branch", currentBranch)
 	if err := repo.PushBranch(currentBranch); err != nil {
 		return fmt.Errorf("failed to push branch: %w", err)
 	}
+	log.Info("Branch pushed successfully")
 	return nil
 }
 
@@ -172,6 +188,7 @@ func initializeGitLabClient(repo *git.Repository) (*gitlab.Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create GitLab client: %w", err)
 	}
+	client.SetLogger(log)
 
 	remoteURL, err := repo.GetRemoteURL("origin")
 	if err != nil {
@@ -192,6 +209,7 @@ func selectGitLabLabels(client *gitlab.Client) ([]string, error) {
 	}
 
 	labelSelector := ui.NewLabelSelector()
+	labelSelector.SetLogger(log)
 	labelInterfaces := make([]ui.Label, len(labels))
 	for i, label := range labels {
 		labelInterfaces[i] = &ui.GitLabLabel{Name: label.Name}
@@ -211,7 +229,7 @@ func createGitLabMR(
 	currentBranch, mainBranch, title, body string,
 	labels []string,
 ) (*gogitlab.MergeRequest, error) {
-	fmt.Println("Creating merge request...")
+	log.Info("Creating merge request...")
 	mr, err := client.CreateMergeRequest(
 		currentBranch, mainBranch, title, body,
 		cfg.GitLab.Assignee, cfg.GitLab.Reviewer, labels,
@@ -221,24 +239,24 @@ func createGitLabMR(
 		errMsg := err.Error()
 		if strings.Contains(errMsg, "already exists") ||
 			strings.Contains(errMsg, "Another open merge request already exists") {
-			fmt.Printf("Warning: Merge request already exists for branch %s\n", currentBranch)
+			log.Warn("Merge request already exists for branch", "branch", currentBranch)
 			// Fetch the existing MR
 			existingMR, fetchErr := client.GetMergeRequestByBranch(currentBranch, mainBranch)
 			if fetchErr != nil {
 				return nil, fmt.Errorf("failed to fetch existing merge request: %w", fetchErr)
 			}
-			fmt.Printf("Using existing merge request: %s\n", existingMR.WebURL)
+			log.Info("Using existing merge request", "url", existingMR.WebURL)
 			return existingMR, nil
 		}
 		return nil, fmt.Errorf("failed to create merge request: %w", err)
 	}
 
-	fmt.Printf("Merge request created: %s\n", mr.WebURL)
+	log.Info("Merge request created", "url", mr.WebURL)
 	return mr, nil
 }
 
 func waitAndMergeGitLabMR(client *gitlab.Client, mr *gogitlab.MergeRequest) error {
-	fmt.Println("Waiting for pipeline to complete...")
+	log.Info("Waiting for pipeline to complete...")
 	time.Sleep(pipelineStartupDelay)
 
 	status, err := client.WaitForPipeline(defaultPipelineTimeout)
@@ -250,16 +268,17 @@ func waitAndMergeGitLabMR(client *gitlab.Client, mr *gogitlab.MergeRequest) erro
 		return fmt.Errorf("%w with status: %s", errPipelineFailed, status)
 	}
 
-	fmt.Println("Approving merge request...")
+	log.Info("Approving merge request...")
 	if err := client.ApproveMergeRequest(mr.IID); err != nil {
-		fmt.Printf("Warning: failed to approve merge request: %v\n", err)
+		log.Warn("Failed to approve merge request", "error", err)
 	}
 
-	fmt.Println("Merging merge request...")
+	log.Info("Merging merge request...")
 	if err := client.MergeMergeRequest(mr.IID); err != nil {
 		return fmt.Errorf("failed to merge MR: %w", err)
 	}
 
+	log.Info("Merge request merged successfully")
 	return nil
 }
 
@@ -291,6 +310,7 @@ func initializeGitHubClient(repo *git.Repository) (*github.Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create GitHub client: %w", err)
 	}
+	client.SetLogger(log)
 
 	remoteURL, err := repo.GetRemoteURL("origin")
 	if err != nil {
@@ -311,6 +331,7 @@ func selectGitHubLabels(client *github.Client) ([]string, error) {
 	}
 
 	labelSelector := ui.NewLabelSelector()
+	labelSelector.SetLogger(log)
 	labelInterfaces := make([]ui.Label, len(labels))
 	for i, label := range labels {
 		labelInterfaces[i] = &ui.GitHubLabel{Name: label.Name}
@@ -330,7 +351,7 @@ func createGitHubPR(
 	currentBranch, mainBranch, title, body string,
 	labels []string,
 ) (*gogithub.PullRequest, error) {
-	fmt.Println("Creating pull request...")
+	log.Info("Creating pull request...")
 	pr, err := client.CreatePullRequest(
 		currentBranch, mainBranch, title, body,
 		[]string{cfg.GitHub.Assignee},
@@ -340,24 +361,24 @@ func createGitHubPR(
 	if err != nil {
 		// Check if error is about PR already existing
 		if strings.Contains(err.Error(), "pull request already exists") {
-			fmt.Printf("Warning: Pull request already exists for branch %s\n", currentBranch)
+			log.Warn("Pull request already exists for branch", "branch", currentBranch)
 			// Fetch the existing PR
 			existingPR, fetchErr := client.GetPullRequestByBranch(currentBranch, mainBranch)
 			if fetchErr != nil {
 				return nil, fmt.Errorf("failed to fetch existing pull request: %w", fetchErr)
 			}
-			fmt.Printf("Using existing pull request: %s\n", *existingPR.HTMLURL)
+			log.Info("Using existing pull request", "url", *existingPR.HTMLURL)
 			return existingPR, nil
 		}
 		return nil, fmt.Errorf("failed to create pull request: %w", err)
 	}
 
-	fmt.Printf("Pull request created: %s\n", *pr.HTMLURL)
+	log.Info("Pull request created", "url", *pr.HTMLURL)
 	return pr, nil
 }
 
 func waitAndMergeGitHubPR(client *github.Client, pr *gogithub.PullRequest) error {
-	fmt.Println("Waiting for workflows to complete...")
+	log.Info("Waiting for workflows to complete...")
 	time.Sleep(pipelineStartupDelay)
 
 	conclusion, err := client.WaitForWorkflows(defaultPipelineTimeout)
@@ -369,40 +390,41 @@ func waitAndMergeGitHubPR(client *github.Client, pr *gogithub.PullRequest) error
 		return fmt.Errorf("%w with conclusion: %s", errWorkflowFailed, conclusion)
 	}
 
-	fmt.Println("Merging pull request...")
+	log.Info("Merging pull request...")
 	if err := client.MergePullRequest(*pr.Number, "squash"); err != nil {
 		return fmt.Errorf("failed to merge pull request: %w", err)
 	}
 
+	log.Info("Pull request merged successfully")
 	return nil
 }
 
 func cleanup(repo *git.Repository, mainBranch, currentBranch string) error {
 	// Switch to main branch
-	fmt.Printf("Switching to %s branch...\n", mainBranch)
+	log.Info("Switching to main branch", "branch", mainBranch)
 	if err := repo.SwitchBranch(mainBranch); err != nil {
 		return fmt.Errorf("failed to switch to main branch: %w", err)
 	}
 
 	// Pull latest changes
-	fmt.Println("Pulling latest changes...")
+	log.Info("Pulling latest changes...")
 	if err := repo.Pull(); err != nil {
 		return fmt.Errorf("failed to pull changes: %w", err)
 	}
 
 	// Fetch and prune
-	fmt.Println("Fetching and pruning...")
+	log.Info("Fetching and pruning...")
 	if err := repo.FetchAndPrune(); err != nil {
 		return fmt.Errorf("failed to fetch and prune: %w", err)
 	}
 
 	// Delete feature branch
-	fmt.Printf("Deleting branch %s...\n", currentBranch)
+	log.Info("Deleting feature branch", "branch", currentBranch)
 	if err := repo.DeleteBranch(currentBranch); err != nil {
 		return fmt.Errorf("failed to delete branch: %w", err)
 	}
 
-	fmt.Println("auto-mr completed successfully!")
+	log.Info("auto-mr completed successfully!")
 	return nil
 }
 

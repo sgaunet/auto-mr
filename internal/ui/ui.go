@@ -3,12 +3,16 @@ package ui
 
 import (
 	"fmt"
+	"log/slog"
 
 	"github.com/AlecAivazis/survey/v2"
+	"github.com/sgaunet/auto-mr/internal/logger"
 )
 
 // LabelSelector provides interactive label selection functionality.
-type LabelSelector struct{}
+type LabelSelector struct {
+	log *slog.Logger
+}
 
 // Label represents a label that can be selected.
 type Label interface {
@@ -17,12 +21,18 @@ type Label interface {
 
 // NewLabelSelector creates a new label selector.
 func NewLabelSelector() *LabelSelector {
-	return &LabelSelector{}
+	return &LabelSelector{log: logger.NoLogger()}
+}
+
+// SetLogger sets the logger for the label selector.
+func (ls *LabelSelector) SetLogger(logger *slog.Logger) {
+	ls.log = logger
 }
 
 // SelectLabels presents an interactive multi-select prompt for choosing labels.
 func (ls *LabelSelector) SelectLabels(labels []Label, maxSelection int) ([]string, error) {
 	if len(labels) == 0 {
+		ls.log.Debug("No labels available for selection")
 		return []string{}, nil
 	}
 
@@ -31,6 +41,7 @@ func (ls *LabelSelector) SelectLabels(labels []Label, maxSelection int) ([]strin
 		options[i] = label.GetName()
 	}
 
+	ls.log.Debug("Prompting user to select labels", "available", len(labels), "max", maxSelection)
 	var selected []string
 	prompt := &survey.MultiSelect{
 		Message: "Choose labels:",
@@ -51,6 +62,7 @@ func (ls *LabelSelector) SelectLabels(labels []Label, maxSelection int) ([]strin
 		selected = selected[:maxSelection]
 	}
 
+	ls.log.Debug("Labels selected", "count", len(selected))
 	return selected, nil
 }
 

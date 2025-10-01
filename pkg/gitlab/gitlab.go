@@ -4,11 +4,13 @@ package gitlab
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/sgaunet/auto-mr/internal/logger"
 	gitlab "gitlab.com/gitlab-org/api/client-go"
 )
 
@@ -31,6 +33,7 @@ type Client struct {
 	client    *gitlab.Client
 	projectID string
 	mrIID     int
+	log       *slog.Logger
 }
 
 // Label represents a GitLab label.
@@ -50,7 +53,13 @@ func NewClient() (*Client, error) {
 		return nil, fmt.Errorf("failed to create GitLab client: %w", err)
 	}
 
-	return &Client{client: client}, nil
+	return &Client{client: client, log: logger.NoLogger()}, nil
+}
+
+// SetLogger sets the logger for the GitLab client.
+func (c *Client) SetLogger(logger *slog.Logger) {
+	c.log = logger
+	c.log.Debug("GitLab client logger configured")
 }
 
 // SetProjectFromURL sets the project from a git remote URL.
@@ -66,6 +75,7 @@ func (c *Client) SetProjectFromURL(url string) error {
 		return errInvalidURLFormat
 	}
 
+	c.log.Debug("Setting GitLab project", "path", projectPath)
 	// Get project info to validate and get project ID
 	project, _, err := c.client.Projects.GetProject(projectPath, nil)
 	if err != nil {
@@ -73,6 +83,7 @@ func (c *Client) SetProjectFromURL(url string) error {
 	}
 
 	c.projectID = strconv.Itoa(project.ID)
+	c.log.Debug("GitLab project set", "id", c.projectID)
 	return nil
 }
 
@@ -101,6 +112,7 @@ func extractProjectPath(url string) string {
 
 // ListLabels returns all labels for the project.
 func (c *Client) ListLabels() ([]*Label, error) {
+	c.log.Debug("Listing GitLab labels")
 	labels, _, err := c.client.Labels.ListLabels(c.projectID, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list labels: %w", err)
@@ -111,6 +123,7 @@ func (c *Client) ListLabels() ([]*Label, error) {
 		result[i] = &Label{Name: label.Name}
 	}
 
+	c.log.Debug("Labels retrieved", "count", len(labels))
 	return result, nil
 }
 
@@ -119,6 +132,8 @@ func (c *Client) CreateMergeRequest(
 	sourceBranch, targetBranch, title, description, assignee, reviewer string,
 	labels []string,
 ) (*gitlab.MergeRequest, error) {
+	c.log.Debug("Creating merge request", "source", sourceBranch, "target", targetBranch)
+
 	// Get user IDs for assignee and reviewer
 	assigneeUser, _, err := c.client.Users.ListUsers(&gitlab.ListUsersOptions{
 		Username: &assignee,
@@ -156,6 +171,7 @@ func (c *Client) CreateMergeRequest(
 	}
 
 	c.mrIID = mr.IID
+	c.log.Debug("Merge request created", "iid", mr.IID, "url", mr.WebURL)
 	return mr, nil
 }
 
@@ -186,6 +202,7 @@ func (c *Client) GetMergeRequestByBranch(sourceBranch, targetBranch string) (*gi
 
 // WaitForPipeline waits for all pipelines to complete for the merge request.
 func (c *Client) WaitForPipeline(timeout time.Duration) (string, error) {
+	c.log.Debug("Waiting for pipeline", "timeout", timeout)
 	start := time.Now()
 
 	for time.Since(start) < timeout {
@@ -195,6 +212,7 @@ func (c *Client) WaitForPipeline(timeout time.Duration) (string, error) {
 		}
 
 		if len(pipelines) == 0 {
+			c.log.Debug("No pipelines found yet")
 			time.Sleep(pipelinePollInterval)
 			continue
 		}
@@ -203,11 +221,12 @@ func (c *Client) WaitForPipeline(timeout time.Duration) (string, error) {
 		status := pipeline.Status
 
 		if status == "running" || status == "pending" || status == "created" {
-			fmt.Printf("Pipeline is still %s...\n", status)
+			c.log.Info("Pipeline is still running", "status", status)
 			time.Sleep(pipelinePollInterval)
 			continue
 		}
 
+		c.log.Debug("Pipeline completed", "status", status)
 		return status, nil
 	}
 
@@ -216,15 +235,18 @@ func (c *Client) WaitForPipeline(timeout time.Duration) (string, error) {
 
 // ApproveMergeRequest approves a merge request.
 func (c *Client) ApproveMergeRequest(mrIID int) error {
+	c.log.Debug("Approving merge request", "iid", mrIID)
 	_, _, err := c.client.MergeRequestApprovals.ApproveMergeRequest(c.projectID, mrIID, nil)
 	if err != nil {
 		return fmt.Errorf("failed to approve merge request: %w", err)
 	}
+	c.log.Debug("Merge request approved")
 	return nil
 }
 
 // MergeMergeRequest merges a merge request.
 func (c *Client) MergeMergeRequest(mrIID int) error {
+	c.log.Debug("Merging merge request", "iid", mrIID)
 	mergeOptions := &gitlab.AcceptMergeRequestOptions{
 		Squash:             gitlab.Ptr(true),
 		ShouldRemoveSourceBranch: gitlab.Ptr(true),
@@ -235,6 +257,7 @@ func (c *Client) MergeMergeRequest(mrIID int) error {
 		return fmt.Errorf("failed to merge MR: %w", err)
 	}
 
+	c.log.Debug("Merge request merged successfully")
 	return nil
 }
 

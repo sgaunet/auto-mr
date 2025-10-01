@@ -5,11 +5,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/google/go-github/v69/github"
+	"github.com/sgaunet/auto-mr/internal/logger"
 	"golang.org/x/oauth2"
 )
 
@@ -33,6 +35,7 @@ type Client struct {
 	repo     string
 	prNumber int
 	prSHA    string
+	log      *slog.Logger
 }
 
 // Label represents a GitHub label.
@@ -56,7 +59,14 @@ func NewClient() (*Client, error) {
 
 	return &Client{
 		client: client,
+		log:    logger.NoLogger(),
 	}, nil
+}
+
+// SetLogger sets the logger for the GitHub client.
+func (c *Client) SetLogger(logger *slog.Logger) {
+	c.log = logger
+	c.log.Debug("GitHub client logger configured")
 }
 
 // SetRepositoryFromURL sets the repository from a git remote URL.
@@ -80,12 +90,14 @@ func (c *Client) SetRepositoryFromURL(url string) error {
 	c.owner = parts[0]
 	c.repo = parts[1]
 
+	c.log.Debug("Setting GitHub repository", "owner", c.owner, "repo", c.repo)
 	// Validate repository exists
 	_, _, err := c.client.Repositories.Get(c.ctx(), c.owner, c.repo)
 	if err != nil {
 		return fmt.Errorf("failed to get repository information: %w", err)
 	}
 
+	c.log.Debug("GitHub repository set successfully")
 	return nil
 }
 
@@ -114,6 +126,7 @@ func extractOwnerRepo(url string) string {
 
 // ListLabels returns all labels for the repository.
 func (c *Client) ListLabels() ([]*Label, error) {
+	c.log.Debug("Listing GitHub labels")
 	labels, _, err := c.client.Issues.ListLabels(c.ctx(), c.owner, c.repo, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list labels: %w", err)
@@ -124,6 +137,7 @@ func (c *Client) ListLabels() ([]*Label, error) {
 		result[i] = &Label{Name: *label.Name}
 	}
 
+	c.log.Debug("Labels retrieved", "count", len(labels))
 	return result, nil
 }
 
@@ -132,6 +146,8 @@ func (c *Client) CreatePullRequest(
 	head, base, title, body string,
 	assignees, reviewers, labels []string,
 ) (*github.PullRequest, error) {
+	c.log.Debug("Creating pull request", "head", head, "base", base)
+
 	newPR := &github.NewPullRequest{
 		Title: github.Ptr(title),
 		Head:  github.Ptr(head),
@@ -169,6 +185,7 @@ func (c *Client) CreatePullRequest(
 
 	c.prNumber = *pr.Number
 	c.prSHA = *pr.Head.SHA
+	c.log.Debug("Pull request created", "number", c.prNumber, "url", *pr.HTMLURL)
 	return pr, nil
 }
 
@@ -195,6 +212,7 @@ func (c *Client) GetPullRequestByBranch(head, base string) (*github.PullRequest,
 
 // WaitForWorkflows waits for all workflow runs to complete for the pull request.
 func (c *Client) WaitForWorkflows(timeout time.Duration) (string, error) {
+	c.log.Debug("Waiting for workflows", "timeout", timeout)
 	start := time.Now()
 
 	for time.Since(start) < timeout {
@@ -209,6 +227,7 @@ func (c *Client) WaitForWorkflows(timeout time.Duration) (string, error) {
 		}
 
 		if checkRuns.GetTotal() == 0 {
+			c.log.Debug("No check runs found yet")
 			time.Sleep(checkPollInterval)
 			continue
 		}
@@ -219,6 +238,7 @@ func (c *Client) WaitForWorkflows(timeout time.Duration) (string, error) {
 			continue
 		}
 
+		c.log.Debug("All workflows completed", "conclusion", conclusion)
 		return conclusion, nil
 	}
 
@@ -227,6 +247,7 @@ func (c *Client) WaitForWorkflows(timeout time.Duration) (string, error) {
 
 // MergePullRequest merges a pull request using the specified merge method.
 func (c *Client) MergePullRequest(prNumber int, mergeMethod string) error {
+	c.log.Debug("Merging pull request", "number", prNumber, "method", mergeMethod)
 	options := &github.PullRequestOptions{
 		MergeMethod: mergeMethod, // "squash", "merge", or "rebase"
 	}
@@ -236,6 +257,7 @@ func (c *Client) MergePullRequest(prNumber int, mergeMethod string) error {
 		return fmt.Errorf("failed to merge pull request: %w", err)
 	}
 
+	c.log.Debug("Pull request merged successfully")
 	return nil
 }
 
@@ -297,7 +319,7 @@ func (c *Client) processCheckRuns(checks []*github.CheckRun) (bool, string) {
 		status := check.GetStatus()
 		if status == "in_progress" || status == "queued" {
 			allCompleted = false
-			fmt.Printf("Check '%s' is still %s...\n", check.GetName(), status)
+			c.log.Info("Workflow check is still running", "name", check.GetName(), "status", status)
 			break
 		}
 

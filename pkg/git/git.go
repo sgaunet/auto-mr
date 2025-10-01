@@ -4,6 +4,7 @@ package git
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/go-git/go-git/v5/plumbing/transport/http"
 	"github.com/go-git/go-git/v5/plumbing/transport/ssh"
+	"github.com/sgaunet/auto-mr/internal/logger"
 	"golang.org/x/crypto/ssh/knownhosts"
 )
 
@@ -42,6 +44,7 @@ type authMethod struct {
 type Repository struct {
 	repo *git.Repository
 	auth transport.AuthMethod
+	log  *slog.Logger
 }
 
 // Platform represents a git hosting platform.
@@ -56,12 +59,14 @@ const (
 
 // OpenRepository opens a git repository at the given path.
 func OpenRepository(path string) (*Repository, error) {
+	noLog := logger.NoLogger()
 	repo, err := git.PlainOpen(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open git repository: %w", err)
 	}
 
-	auth, err := getAuth(repo)
+	r := &Repository{repo: repo, log: noLog}
+	auth, err := getAuth(repo, noLog)
 	if err != nil {
 		return nil, fmt.Errorf("failed to setup authentication: %w", err)
 	}
@@ -74,11 +79,18 @@ func OpenRepository(path string) (*Repository, error) {
 		}
 	}
 
-	return &Repository{repo: repo, auth: finalAuth}, nil
+	r.auth = finalAuth
+	return r, nil
+}
+
+// SetLogger sets the logger for the repository.
+func (r *Repository) SetLogger(logger *slog.Logger) {
+	r.log = logger
+	r.log.Debug("Opening git repository")
 }
 
 // getAuth determines the appropriate authentication method based on the remote URL.
-func getAuth(repo *git.Repository) (*authMethod, error) {
+func getAuth(repo *git.Repository, logger *slog.Logger) (*authMethod, error) {
 	remote, err := repo.Remote("origin")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get origin remote: %w", err)
@@ -90,42 +102,48 @@ func getAuth(repo *git.Repository) (*authMethod, error) {
 	}
 
 	url := urls[0]
+	logger.Debug("Determining authentication method", "url", url)
 
 	// Check if it's an HTTPS URL and if tokens are available
 	if strings.HasPrefix(url, "https://") {
-		return getHTTPSAuth(url)
+		return getHTTPSAuth(url, logger)
 	}
 
 	// For SSH URLs, setup SSH authentication
 	if strings.HasPrefix(url, "git@") || strings.HasPrefix(url, "ssh://") {
-		return setupSSHAuth()
+		return setupSSHAuth(logger)
 	}
 
+	logger.Debug("No authentication required")
 	return &authMethod{method: &noAuthMethod{}}, nil // No authentication needed
 }
 
 // getHTTPSAuth returns HTTP authentication for HTTPS URLs.
-func getHTTPSAuth(url string) (*authMethod, error) {
+func getHTTPSAuth(url string, logger *slog.Logger) (*authMethod, error) {
 	if strings.Contains(url, "gitlab.com") {
 		if token := os.Getenv("GITLAB_TOKEN"); token != "" {
+			logger.Debug("Using GitLab token authentication")
 			return &authMethod{method: &http.BasicAuth{
 				Username: "oauth2",
 				Password: token,
 			}}, nil
 		}
+		logger.Debug("GITLAB_TOKEN not found")
 	} else if strings.Contains(url, "github.com") {
 		if token := os.Getenv("GITHUB_TOKEN"); token != "" {
+			logger.Debug("Using GitHub token authentication")
 			return &authMethod{method: &http.BasicAuth{
 				Username: "x-access-token",
 				Password: token,
 			}}, nil
 		}
+		logger.Debug("GITHUB_TOKEN not found")
 	}
 	return &authMethod{method: &noAuthMethod{}}, nil // No token available, try without auth
 }
 
 // setupSSHAuth configures SSH authentication using the user's SSH keys.
-func setupSSHAuth() (*authMethod, error) {
+func setupSSHAuth(logger *slog.Logger) (*authMethod, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get home directory: %w", err)
@@ -141,9 +159,11 @@ func setupSSHAuth() (*authMethod, error) {
 	var sshAuth *ssh.PublicKeys
 	for _, keyFile := range keyFiles {
 		if _, err := os.Stat(keyFile); err == nil {
+			logger.Debug("Trying SSH key", "file", keyFile)
 			// #nosec G304 - Reading SSH keys from standard locations is intentional
 			sshAuth, err = ssh.NewPublicKeysFromFile("git", keyFile, "")
 			if err != nil {
+				logger.Debug("Failed to load SSH key", "file", keyFile, "error", err)
 				// Try next key file if this one fails
 				continue
 			}
@@ -157,6 +177,7 @@ func setupSSHAuth() (*authMethod, error) {
 				}
 			}
 
+			logger.Debug("SSH authentication configured", "key", keyFile)
 			return &authMethod{method: sshAuth}, nil
 		}
 	}
@@ -166,6 +187,7 @@ func setupSSHAuth() (*authMethod, error) {
 
 // GetMainBranch determines the main branch name (main or master).
 func (r *Repository) GetMainBranch() (string, error) {
+	r.log.Debug("Determining main branch")
 	remote, err := r.repo.Remote("origin")
 	if err != nil {
 		return "", fmt.Errorf("failed to get origin remote: %w", err)
@@ -183,7 +205,9 @@ func (r *Repository) GetMainBranch() (string, error) {
 			// Extract branch name from symbolic reference
 			target := ref.Target()
 			if target.IsBranch() {
-				return target.Short(), nil
+				mainBranch := target.Short()
+				r.log.Debug("Main branch found", "branch", mainBranch)
+				return mainBranch, nil
 			}
 		}
 	}
@@ -191,6 +215,7 @@ func (r *Repository) GetMainBranch() (string, error) {
 	// Fallback to common default branches
 	for _, defaultBranch := range []string{"main", "master"} {
 		if r.branchExists(defaultBranch) {
+			r.log.Debug("Main branch found (fallback)", "branch", defaultBranch)
 			return defaultBranch, nil
 		}
 	}
@@ -258,6 +283,7 @@ func (r *Repository) DetectPlatform() (Platform, error) {
 
 // PushBranch pushes the specified branch to the origin remote.
 func (r *Repository) PushBranch(branchName string) error {
+	r.log.Debug("Pushing branch", "branch", branchName)
 	err := r.repo.Push(&git.PushOptions{
 		RemoteName: "origin",
 		RefSpecs: []config.RefSpec{
@@ -268,6 +294,7 @@ func (r *Repository) PushBranch(branchName string) error {
 	if err != nil && !errors.Is(err, git.NoErrAlreadyUpToDate) {
 		return fmt.Errorf("failed to push branch: %w", err)
 	}
+	r.log.Debug("Branch pushed successfully", "branch", branchName)
 	return nil
 }
 
