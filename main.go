@@ -35,9 +35,12 @@ var (
 )
 
 var (
-	logLevel string
-	log      *slog.Logger
+	logLevel    string
+	showVersion bool
+	log         *slog.Logger
 )
+
+var version = "dev"
 
 var rootCmd = &cobra.Command{
 	Use:   "auto-mr",
@@ -46,6 +49,10 @@ var rootCmd = &cobra.Command{
 on GitLab and GitHub repositories. It handles pipeline waiting, auto-approval,
 and branch cleanup.`,
 	Run: func(_ *cobra.Command, _ []string) {
+		if showVersion {
+			fmt.Println(version)
+			os.Exit(0)
+		}
 		if err := runAutoMR(); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
@@ -56,6 +63,7 @@ and branch cleanup.`,
 func init() {
 	rootCmd.PersistentFlags().StringVarP(&logLevel, "log-level", "l", "info",
 		"Set log level (debug, info, warn, error)")
+	rootCmd.Flags().BoolVarP(&showVersion, "version", "v", false, "Print version and exit")
 }
 
 func main() {
