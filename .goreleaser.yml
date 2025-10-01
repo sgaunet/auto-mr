@@ -42,6 +42,3 @@ changelog:
     exclude:
       - '^docs:'
       - '^test:'
-
-snapshot:
-  name_template: "latest"
