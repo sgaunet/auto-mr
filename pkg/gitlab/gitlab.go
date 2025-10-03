@@ -242,28 +242,6 @@ func (c *Client) WaitForPipeline(timeout time.Duration) (string, error) {
 	return "", errPipelineTimeout
 }
 
-// hasPipelineRuns checks if there are any pipeline runs (in any state) for this MR.
-func (c *Client) hasPipelineRuns() bool {
-	// Check for pipelines associated with this commit SHA
-	pipelines, _, err := c.client.Pipelines.ListProjectPipelines(
-		c.projectID,
-		&gitlab.ListProjectPipelinesOptions{
-			SHA: gitlab.Ptr(c.mrSHA),
-		},
-	)
-	if err != nil {
-		c.log.Debug("Failed to list project pipelines, assuming pipelines exist", "error", err)
-		return true // Assume pipelines exist on error to be safe
-	}
-
-	if len(pipelines) > 0 {
-		c.log.Debug("Found pipeline runs for MR", "count", len(pipelines))
-		return true
-	}
-
-	return false
-}
-
 // ApproveMergeRequest approves a merge request.
 func (c *Client) ApproveMergeRequest(mrIID int) error {
 	c.log.Debug("Approving merge request", "iid", mrIID)
@@ -303,4 +281,26 @@ func (c *Client) GetMergeRequestsByBranch(sourceBranch string) ([]*gitlab.BasicM
 	}
 
 	return mrs, nil
+}
+
+// hasPipelineRuns checks if there are any pipeline runs (in any state) for this MR.
+func (c *Client) hasPipelineRuns() bool {
+	// Check for pipelines associated with this commit SHA
+	pipelines, _, err := c.client.Pipelines.ListProjectPipelines(
+		c.projectID,
+		&gitlab.ListProjectPipelinesOptions{
+			SHA: gitlab.Ptr(c.mrSHA),
+		},
+	)
+	if err != nil {
+		c.log.Debug("Failed to list project pipelines, assuming pipelines exist", "error", err)
+		return true // Assume pipelines exist on error to be safe
+	}
+
+	if len(pipelines) > 0 {
+		c.log.Debug("Found pipeline runs for MR", "count", len(pipelines))
+		return true
+	}
+
+	return false
 }
