@@ -33,6 +33,7 @@ type Client struct {
 	client    *gitlab.Client
 	projectID string
 	mrIID     int
+	mrSHA     string
 	log       *slog.Logger
 }
 
@@ -171,7 +172,8 @@ func (c *Client) CreateMergeRequest(
 	}
 
 	c.mrIID = mr.IID
-	c.log.Debug("Merge request created", "iid", mr.IID, "url", mr.WebURL)
+	c.mrSHA = mr.SHA
+	c.log.Debug("Merge request created", "iid", mr.IID, "sha", mr.SHA, "url", mr.WebURL)
 	return mr, nil
 }
 
@@ -197,6 +199,7 @@ func (c *Client) GetMergeRequestByBranch(sourceBranch, targetBranch string) (*gi
 	}
 
 	c.mrIID = mr.IID
+	c.mrSHA = mr.SHA
 	return mr, nil
 }
 
@@ -205,6 +208,12 @@ func (c *Client) WaitForPipeline(timeout time.Duration) (string, error) {
 	c.log.Debug("Waiting for pipeline", "timeout", timeout)
 	start := time.Now()
 
+	// First check if any pipelines are expected for this commit
+	if !c.hasPipelineRuns() {
+		c.log.Info("No pipeline runs configured for this merge request, proceeding without checks")
+		return "success", nil
+	}
+
 	for time.Since(start) < timeout {
 		pipelines, _, err := c.client.MergeRequests.ListMergeRequestPipelines(c.projectID, c.mrIID, nil)
 		if err != nil {
@@ -212,7 +221,7 @@ func (c *Client) WaitForPipeline(timeout time.Duration) (string, error) {
 		}
 
 		if len(pipelines) == 0 {
-			c.log.Debug("No pipelines found yet")
+			c.log.Debug("No pipelines found yet, waiting for CI to start")
 			time.Sleep(pipelinePollInterval)
 			continue
 		}
@@ -272,4 +281,26 @@ func (c *Client) GetMergeRequestsByBranch(sourceBranch string) ([]*gitlab.BasicM
 	}
 
 	return mrs, nil
+}
+
+// hasPipelineRuns checks if there are any pipeline runs (in any state) for this MR.
+func (c *Client) hasPipelineRuns() bool {
+	// Check for pipelines associated with this commit SHA
+	pipelines, _, err := c.client.Pipelines.ListProjectPipelines(
+		c.projectID,
+		&gitlab.ListProjectPipelinesOptions{
+			SHA: gitlab.Ptr(c.mrSHA),
+		},
+	)
+	if err != nil {
+		c.log.Debug("Failed to list project pipelines, assuming pipelines exist", "error", err)
+		return true // Assume pipelines exist on error to be safe
+	}
+
+	if len(pipelines) > 0 {
+		c.log.Debug("Found pipeline runs for MR", "count", len(pipelines))
+		return true
+	}
+
+	return false
 }

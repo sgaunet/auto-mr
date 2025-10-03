@@ -26,6 +26,7 @@ const (
 	minURLParts          = 2
 	maxCheckRunsPerPage  = 100
 	checkPollInterval    = 5 * time.Second
+	conclusionSuccess    = "success"
 )
 
 // Client represents a GitHub API client wrapper.
@@ -215,6 +216,12 @@ func (c *Client) WaitForWorkflows(timeout time.Duration) (string, error) {
 	c.log.Debug("Waiting for workflows", "timeout", timeout)
 	start := time.Now()
 
+	// First check if any workflow runs are expected for this PR
+	if !c.hasWorkflowRuns() {
+		c.log.Info("No workflow runs configured for this pull request, proceeding without checks")
+		return conclusionSuccess, nil
+	}
+
 	for time.Since(start) < timeout {
 		checkRuns, _, err := c.client.Checks.ListCheckRunsForRef(
 			c.ctx(), c.owner, c.repo, c.prSHA,
@@ -227,7 +234,7 @@ func (c *Client) WaitForWorkflows(timeout time.Duration) (string, error) {
 		}
 
 		if checkRuns.GetTotal() == 0 {
-			c.log.Debug("No check runs found yet")
+			c.log.Debug("No check runs found yet, waiting for workflows to start")
 			time.Sleep(checkPollInterval)
 			continue
 		}
@@ -283,6 +290,44 @@ func (c *Client) DeleteBranch(branch string) error {
 	return nil
 }
 
+// hasWorkflowRuns checks if there are any workflow runs (in any state) for this PR.
+func (c *Client) hasWorkflowRuns() bool {
+	// Check for workflow runs associated with this commit SHA
+	runs, _, err := c.client.Actions.ListRepositoryWorkflowRuns(
+		c.ctx(), c.owner, c.repo,
+		&github.ListWorkflowRunsOptions{
+			Event:   "pull_request",
+			HeadSHA: c.prSHA,
+		},
+	)
+	if err != nil {
+		c.log.Debug("Failed to list workflow runs, assuming workflows exist", "error", err)
+		return true // Assume workflows exist on error to be safe
+	}
+
+	if runs.GetTotalCount() > 0 {
+		c.log.Debug("Found workflow runs for PR", "count", runs.GetTotalCount())
+		return true
+	}
+
+	// Also check suites as they're created even before runs start
+	checkSuites, _, err := c.client.Checks.ListCheckSuitesForRef(
+		c.ctx(), c.owner, c.repo, c.prSHA,
+		&github.ListCheckSuiteOptions{},
+	)
+	if err != nil {
+		c.log.Debug("Failed to list check suites, assuming workflows exist", "error", err)
+		return true // Assume workflows exist on error to be safe
+	}
+
+	if checkSuites.GetTotal() > 0 {
+		c.log.Debug("Found check suites for PR", "count", checkSuites.GetTotal())
+		return true
+	}
+
+	return false
+}
+
 // ctx returns the context for API calls.
 func (c *Client) ctx() context.Context {
 	return context.Background()
@@ -313,7 +358,7 @@ func (c *Client) addReviewers(pr *github.PullRequest, reviewers []string) error 
 // processCheckRuns evaluates check run statuses and returns completion state and overall conclusion.
 func (c *Client) processCheckRuns(checks []*github.CheckRun) (bool, string) {
 	allCompleted := true
-	conclusion := "success"
+	conclusion := conclusionSuccess
 
 	for _, check := range checks {
 		status := check.GetStatus()
@@ -324,7 +369,7 @@ func (c *Client) processCheckRuns(checks []*github.CheckRun) (bool, string) {
 		}
 
 		checkConclusion := check.GetConclusion()
-		if checkConclusion != "success" && checkConclusion != "skipped" && checkConclusion != "neutral" {
+		if checkConclusion != conclusionSuccess && checkConclusion != "skipped" && checkConclusion != "neutral" {
 			conclusion = checkConclusion
 		}
 	}
