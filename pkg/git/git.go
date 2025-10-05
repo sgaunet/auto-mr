@@ -2,10 +2,12 @@
 package git
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -298,59 +300,70 @@ func (r *Repository) PushBranch(branchName string) error {
 	return nil
 }
 
-// SwitchBranch checks out the specified branch while preserving local changes.
+// SwitchBranch switches to the specified branch using native git command.
+// This will fail if there are local changes that would conflict with the switch,
+// forcing the user to handle conflicts manually (matching auto-mr.sh behavior).
 func (r *Repository) SwitchBranch(branchName string) error {
-	worktree, err := r.repo.Worktree()
+	r.log.Debug("Switching to branch using git switch", "branch", branchName)
+
+	// Use native git switch command to match shell script behavior
+	// This preserves untracked files and fails on conflicts (desired behavior)
+	ctx := context.Background()
+	cmd := exec.CommandContext(ctx, "git", "switch", branchName)
+	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("failed to get worktree: %w", err)
+		return fmt.Errorf("failed to switch branch: %w\nOutput: %s", err, string(output))
 	}
 
-	err = worktree.Checkout(&git.CheckoutOptions{
-		Branch: plumbing.NewBranchReferenceName(branchName),
-		Keep:   true, // Preserve all local changes (modified, staged, and untracked files)
-	})
-	if err != nil {
-		return fmt.Errorf("failed to checkout branch: %w", err)
-	}
+	r.log.Debug("Branch switched successfully", "branch", branchName)
 	return nil
 }
 
-// Pull fetches and merges changes from the remote tracking branch.
+// Pull fetches and merges changes from the remote tracking branch using native git command.
 func (r *Repository) Pull() error {
-	worktree, err := r.repo.Worktree()
+	r.log.Debug("Pulling changes using git pull")
+
+	// Use native git pull command to match shell script behavior
+	ctx := context.Background()
+	cmd := exec.CommandContext(ctx, "git", "pull")
+	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("failed to get worktree: %w", err)
+		return fmt.Errorf("failed to pull: %w\nOutput: %s", err, string(output))
 	}
 
-	err = worktree.Pull(&git.PullOptions{
-		RemoteName: "origin",
-		Auth:       r.auth,
-	})
-	if err != nil && !errors.Is(err, git.NoErrAlreadyUpToDate) {
-		return fmt.Errorf("failed to pull: %w", err)
-	}
+	r.log.Debug("Pull completed successfully")
 	return nil
 }
 
-// DeleteBranch deletes the specified local branch.
+// DeleteBranch force-deletes the specified local branch using native git command.
 func (r *Repository) DeleteBranch(branchName string) error {
-	err := r.repo.Storer.RemoveReference(plumbing.NewBranchReferenceName(branchName))
+	r.log.Debug("Deleting branch using git branch -D", "branch", branchName)
+
+	// Use native git branch -D to force delete (matching shell script behavior)
+	ctx := context.Background()
+	cmd := exec.CommandContext(ctx, "git", "branch", "-D", branchName)
+	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("failed to delete branch: %w", err)
+		return fmt.Errorf("failed to delete branch: %w\nOutput: %s", err, string(output))
 	}
+
+	r.log.Debug("Branch deleted successfully", "branch", branchName)
 	return nil
 }
 
-// FetchAndPrune fetches from origin and prunes deleted remote branches.
+// FetchAndPrune fetches from origin and prunes deleted remote branches using native git command.
 func (r *Repository) FetchAndPrune() error {
-	err := r.repo.Fetch(&git.FetchOptions{
-		RemoteName: "origin",
-		Prune:      true,
-		Auth:       r.auth,
-	})
-	if err != nil && !errors.Is(err, git.NoErrAlreadyUpToDate) {
-		return fmt.Errorf("failed to fetch and prune: %w", err)
+	r.log.Debug("Fetching and pruning using git fetch --prune")
+
+	// Use native git fetch --prune to match shell script behavior
+	ctx := context.Background()
+	cmd := exec.CommandContext(ctx, "git", "fetch", "--prune")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to fetch and prune: %w\nOutput: %s", err, string(output))
 	}
+
+	r.log.Debug("Fetch and prune completed successfully")
 	return nil
 }
 
