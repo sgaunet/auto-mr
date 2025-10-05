@@ -411,13 +411,19 @@ func cleanup(repo *git.Repository, mainBranch, currentBranch string) error {
 	// Switch to main branch
 	log.Info("Switching to main branch", "branch", mainBranch)
 	if err := repo.SwitchBranch(mainBranch); err != nil {
-		return fmt.Errorf("failed to switch to main branch: %w", err)
+		return fmt.Errorf(
+			"failed to switch to main branch: %w\n\n"+
+				"If you have local changes that conflict, please handle them manually:\n"+
+				"  - Commit your changes, or\n"+
+				"  - Stash your changes with: git stash\n"+
+				"  - Then run: git switch %s",
+			err, mainBranch)
 	}
 
 	// Pull latest changes
 	log.Info("Pulling latest changes...")
 	if err := repo.Pull(); err != nil {
-		return fmt.Errorf("failed to pull changes: %w", err)
+		return fmt.Errorf("failed to pull changes: %w\n\nPlease resolve any conflicts manually and run: git pull", err)
 	}
 
 	// Fetch and prune
