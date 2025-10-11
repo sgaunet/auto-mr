@@ -221,7 +221,11 @@ func (c *Client) WaitForPipeline(timeout time.Duration) (string, error) {
 	}
 
 	// Create updatable handle for pipeline status
-	handle := c.updatableLog.InfoHandle("Waiting for pipeline...")
+	c.updatableLog.Info("Waiting for pipeline to complete...")
+	c.updatableLog.IncreasePadding()
+	defer c.updatableLog.DecreasePadding()
+
+	handle := c.updatableLog.InfoHandle("Checking status...")
 
 	for time.Since(start) < timeout {
 		pipelines, _, err := c.client.MergeRequests.ListMergeRequestPipelines(c.projectID, c.mrIID, nil)
@@ -251,7 +255,7 @@ func (c *Client) WaitForPipeline(timeout time.Duration) (string, error) {
 
 		totalDuration := time.Since(start)
 		if status == "success" {
-			handle.Success("Pipeline completed successfully - total time: " + formatDuration(totalDuration))
+			handle.Success("Pipeline passed - total time: " + formatDuration(totalDuration))
 		} else {
 			msg := fmt.Sprintf("Pipeline completed with status: %s - total time: %s",
 				status, formatDuration(totalDuration))
@@ -261,7 +265,7 @@ func (c *Client) WaitForPipeline(timeout time.Duration) (string, error) {
 	}
 
 	totalDuration := time.Since(start)
-	handle.Error("Pipeline timeout after " + formatDuration(totalDuration))
+	handle.Error("Timeout after " + formatDuration(totalDuration))
 	return "", errPipelineTimeout
 }
 

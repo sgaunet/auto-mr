@@ -226,7 +226,11 @@ func (c *Client) WaitForWorkflows(timeout time.Duration) (string, error) {
 	}
 
 	// Create updatable handle for workflow status
-	handle := c.updatableLog.InfoHandle("Waiting for workflows...")
+	c.updatableLog.Info("Waiting for workflows to complete...")
+	c.updatableLog.IncreasePadding()
+	defer c.updatableLog.DecreasePadding()
+
+	handle := c.updatableLog.InfoHandle("Checking status...")
 
 	for time.Since(start) < timeout {
 		checkRuns, _, err := c.client.Checks.ListCheckRunsForRef(
@@ -255,9 +259,9 @@ func (c *Client) WaitForWorkflows(timeout time.Duration) (string, error) {
 
 		totalDuration := time.Since(start)
 		if conclusion == conclusionSuccess {
-			handle.Success("Workflows completed successfully - total time: " + formatDuration(totalDuration))
+			handle.Success("All checks passed - total time: " + formatDuration(totalDuration))
 		} else {
-			msg := fmt.Sprintf("Workflows completed with status: %s - total time: %s",
+			msg := fmt.Sprintf("Checks completed with status: %s - total time: %s",
 				conclusion, formatDuration(totalDuration))
 			handle.Warning(msg)
 		}
@@ -265,7 +269,7 @@ func (c *Client) WaitForWorkflows(timeout time.Duration) (string, error) {
 	}
 
 	totalDuration := time.Since(start)
-	handle.Error("Workflow timeout after " + formatDuration(totalDuration))
+	handle.Error("Timeout after " + formatDuration(totalDuration))
 	return "", errWorkflowTimeout
 }
 
