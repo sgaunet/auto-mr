@@ -31,12 +31,13 @@ const (
 
 // Client represents a GitHub API client wrapper.
 type Client struct {
-	client   *github.Client
-	owner    string
-	repo     string
-	prNumber int
-	prSHA    string
-	log      *bullets.Logger
+	client      *github.Client
+	owner       string
+	repo        string
+	prNumber    int
+	prSHA       string
+	log         *bullets.Logger
+	updatableLog *bullets.UpdatableLogger
 }
 
 // Label represents a GitHub label.
@@ -59,14 +60,16 @@ func NewClient() (*Client, error) {
 	client := github.NewClient(tc)
 
 	return &Client{
-		client: client,
-		log:    logger.NoLogger(),
+		client:      client,
+		log:         logger.NoLogger(),
+		updatableLog: bullets.NewUpdatable(os.Stdout),
 	}, nil
 }
 
 // SetLogger sets the logger for the GitHub client.
 func (c *Client) SetLogger(logger *bullets.Logger) {
 	c.log = logger
+	c.updatableLog.Logger = logger
 	c.log.Debug("GitHub client logger configured")
 }
 
@@ -222,6 +225,9 @@ func (c *Client) WaitForWorkflows(timeout time.Duration) (string, error) {
 		return conclusionSuccess, nil
 	}
 
+	// Create updatable handle for workflow status
+	handle := c.updatableLog.InfoHandle("Waiting for workflows...")
+
 	for time.Since(start) < timeout {
 		checkRuns, _, err := c.client.Checks.ListCheckRunsForRef(
 			c.ctx(), c.owner, c.repo, c.prSHA,
@@ -230,25 +236,36 @@ func (c *Client) WaitForWorkflows(timeout time.Duration) (string, error) {
 			},
 		)
 		if err != nil {
+			handle.Error(fmt.Sprintf("Failed to list check runs: %v", err))
 			return "", fmt.Errorf("failed to list check runs: %w", err)
 		}
 
 		if checkRuns.GetTotal() == 0 {
-			c.log.Debug("No check runs found yet, waiting for workflows to start")
+			elapsed := time.Since(start)
+			handle.Update(bullets.InfoLevel, fmt.Sprintf("Waiting for workflows to start... (%s)", formatDuration(elapsed)))
 			time.Sleep(checkPollInterval)
 			continue
 		}
 
-		allCompleted, conclusion := c.processCheckRuns(checkRuns.CheckRuns)
+		allCompleted, conclusion := c.processCheckRuns(checkRuns.CheckRuns, handle, start)
 		if !allCompleted {
 			time.Sleep(checkPollInterval)
 			continue
 		}
 
-		c.log.Debug("All workflows completed with conclusion: " + conclusion)
+		totalDuration := time.Since(start)
+		if conclusion == conclusionSuccess {
+			handle.Success("Workflows completed successfully - total time: " + formatDuration(totalDuration))
+		} else {
+			msg := fmt.Sprintf("Workflows completed with status: %s - total time: %s",
+				conclusion, formatDuration(totalDuration))
+			handle.Warning(msg)
+		}
 		return conclusion, nil
 	}
 
+	totalDuration := time.Since(start)
+	handle.Error("Workflow timeout after " + formatDuration(totalDuration))
 	return "", errWorkflowTimeout
 }
 
@@ -333,6 +350,18 @@ func (c *Client) ctx() context.Context {
 	return context.Background()
 }
 
+// formatDuration formats a duration into a human-readable string.
+func formatDuration(d time.Duration) string {
+	d = d.Round(time.Second)
+	minutes := d / time.Minute
+	seconds := (d % time.Minute) / time.Second
+
+	if minutes > 0 {
+		return fmt.Sprintf("%dm %ds", minutes, seconds)
+	}
+	return fmt.Sprintf("%ds", seconds)
+}
+
 // addReviewers adds reviewers to a pull request, filtering out the PR author.
 func (c *Client) addReviewers(pr *github.PullRequest, reviewers []string) error {
 	prAuthor := pr.User.GetLogin()
@@ -356,7 +385,9 @@ func (c *Client) addReviewers(pr *github.PullRequest, reviewers []string) error 
 }
 
 // processCheckRuns evaluates check run statuses and returns completion state and overall conclusion.
-func (c *Client) processCheckRuns(checks []*github.CheckRun) (bool, string) {
+func (c *Client) processCheckRuns(
+	checks []*github.CheckRun, handle *bullets.BulletHandle, startTime time.Time,
+) (bool, string) {
 	allCompleted := true
 	conclusion := conclusionSuccess
 
@@ -364,7 +395,9 @@ func (c *Client) processCheckRuns(checks []*github.CheckRun) (bool, string) {
 		status := check.GetStatus()
 		if status == "in_progress" || status == "queued" {
 			allCompleted = false
-			c.log.Info(fmt.Sprintf("Workflow check is still running - name: %s, status: %s", check.GetName(), status))
+			elapsed := time.Since(startTime)
+			handle.Update(bullets.InfoLevel, fmt.Sprintf("Workflow: %s (%s) - running for %s",
+				check.GetName(), status, formatDuration(elapsed)))
 			break
 		}
 
