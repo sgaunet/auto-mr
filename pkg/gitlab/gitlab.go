@@ -30,11 +30,12 @@ const (
 
 // Client represents a GitLab API client wrapper.
 type Client struct {
-	client    *gitlab.Client
-	projectID string
-	mrIID     int
-	mrSHA     string
-	log       *bullets.Logger
+	client      *gitlab.Client
+	projectID   string
+	mrIID       int
+	mrSHA       string
+	log         *bullets.Logger
+	updatableLog *bullets.UpdatableLogger
 }
 
 // Label represents a GitLab label.
@@ -54,12 +55,17 @@ func NewClient() (*Client, error) {
 		return nil, fmt.Errorf("failed to create GitLab client: %w", err)
 	}
 
-	return &Client{client: client, log: logger.NoLogger()}, nil
+	return &Client{
+		client:      client,
+		log:         logger.NoLogger(),
+		updatableLog: bullets.NewUpdatable(os.Stdout),
+	}, nil
 }
 
 // SetLogger sets the logger for the GitLab client.
 func (c *Client) SetLogger(logger *bullets.Logger) {
 	c.log = logger
+	c.updatableLog.Logger = logger
 	c.log.Debug("GitLab client logger configured")
 }
 
@@ -214,14 +220,19 @@ func (c *Client) WaitForPipeline(timeout time.Duration) (string, error) {
 		return "success", nil
 	}
 
+	// Create updatable handle for pipeline status
+	handle := c.updatableLog.InfoHandle("Waiting for pipeline...")
+
 	for time.Since(start) < timeout {
 		pipelines, _, err := c.client.MergeRequests.ListMergeRequestPipelines(c.projectID, c.mrIID, nil)
 		if err != nil {
+			handle.Error(fmt.Sprintf("Failed to list MR pipelines: %v", err))
 			return "", fmt.Errorf("failed to list MR pipelines: %w", err)
 		}
 
 		if len(pipelines) == 0 {
-			c.log.Debug("No pipelines found yet, waiting for CI to start")
+			elapsed := time.Since(start)
+			handle.Update(bullets.InfoLevel, fmt.Sprintf("Waiting for CI to start... (%s)", formatDuration(elapsed)))
 			time.Sleep(pipelinePollInterval)
 			continue
 		}
@@ -230,15 +241,27 @@ func (c *Client) WaitForPipeline(timeout time.Duration) (string, error) {
 		status := pipeline.Status
 
 		if status == "running" || status == "pending" || status == "created" {
-			c.log.Info("Pipeline is still running, status: " + status)
+			elapsed := time.Since(start)
+			msg := fmt.Sprintf("Pipeline status: %s - running for %s",
+				status, formatDuration(elapsed))
+			handle.Update(bullets.InfoLevel, msg)
 			time.Sleep(pipelinePollInterval)
 			continue
 		}
 
-		c.log.Debug("Pipeline completed with status: " + status)
+		totalDuration := time.Since(start)
+		if status == "success" {
+			handle.Success("Pipeline completed successfully - total time: " + formatDuration(totalDuration))
+		} else {
+			msg := fmt.Sprintf("Pipeline completed with status: %s - total time: %s",
+				status, formatDuration(totalDuration))
+			handle.Warning(msg)
+		}
 		return status, nil
 	}
 
+	totalDuration := time.Since(start)
+	handle.Error("Pipeline timeout after " + formatDuration(totalDuration))
 	return "", errPipelineTimeout
 }
 
@@ -303,4 +326,16 @@ func (c *Client) hasPipelineRuns() bool {
 	}
 
 	return false
+}
+
+// formatDuration formats a duration into a human-readable string.
+func formatDuration(d time.Duration) string {
+	d = d.Round(time.Second)
+	minutes := d / time.Minute
+	seconds := (d % time.Minute) / time.Second
+
+	if minutes > 0 {
+		return fmt.Sprintf("%dm %ds", minutes, seconds)
+	}
+	return fmt.Sprintf("%ds", seconds)
 }
