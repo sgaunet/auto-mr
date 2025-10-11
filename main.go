@@ -403,6 +403,14 @@ func waitAndMergeGitHubPR(client *ghclient.Client, pr *github.PullRequest) error
 	}
 
 	log.Info("Pull request merged successfully")
+
+	// Delete remote branch after successful merge (matching shell script behavior)
+	log.Infof("Deleting remote branch: %s", *pr.Head.Ref)
+	if err := client.DeleteBranch(*pr.Head.Ref); err != nil {
+		log.Warnf("Failed to delete remote branch: %v", err)
+		// Don't fail the entire operation if branch deletion fails
+	}
+
 	return nil
 }
 
