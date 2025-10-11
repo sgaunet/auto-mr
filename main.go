@@ -133,10 +133,13 @@ func validateBranches(repo *git.Repository) (string, string, error) {
 
 func prepareRepository(repo *git.Repository, currentBranch string) error {
 	log.Infof("Pushing branch: %s", currentBranch)
+	log.IncreasePadding()
 	if err := repo.PushBranch(currentBranch); err != nil {
+		log.DecreasePadding()
 		return fmt.Errorf("failed to push branch: %w", err)
 	}
 	log.Info("Branch pushed successfully")
+	log.DecreasePadding()
 	return nil
 }
 
@@ -236,6 +239,7 @@ func createGitLabMR(
 	currentBranch, mainBranch, title, body string,
 	labels []string,
 ) (*gogitlab.MergeRequest, error) {
+	log.IncreasePadding()
 	log.Info("Creating merge request...")
 	mr, err := client.CreateMergeRequest(
 		currentBranch, mainBranch, title, body,
@@ -255,10 +259,12 @@ func createGitLabMR(
 			log.Infof("Using existing merge request: %s", existingMR.WebURL)
 			return existingMR, nil
 		}
+		log.DecreasePadding()
 		return nil, fmt.Errorf("failed to create merge request: %w", err)
 	}
 
 	log.Infof("Merge request created: %s", mr.WebURL)
+	log.DecreasePadding()
 	return mr, nil
 }
 
@@ -275,17 +281,21 @@ func waitAndMergeGitLabMR(client *gitlab.Client, mr *gogitlab.MergeRequest) erro
 		return fmt.Errorf("%w with status: %s", errPipelineFailed, status)
 	}
 
+	log.Info("Merging merge request...")
+	log.IncreasePadding()
+
 	log.Info("Approving merge request...")
 	if err := client.ApproveMergeRequest(mr.IID); err != nil {
 		log.Warnf("Failed to approve merge request: %v", err)
 	}
 
-	log.Info("Merging merge request...")
 	if err := client.MergeMergeRequest(mr.IID); err != nil {
+		log.DecreasePadding()
 		return fmt.Errorf("failed to merge MR: %w", err)
 	}
 
 	log.Info("Merge request merged successfully")
+	log.DecreasePadding()
 	return nil
 }
 
@@ -358,6 +368,7 @@ func createGitHubPR(
 	currentBranch, mainBranch, title, body string,
 	labels []string,
 ) (*github.PullRequest, error) {
+	log.IncreasePadding()
 	log.Info("Creating pull request...")
 	pr, err := client.CreatePullRequest(
 		currentBranch, mainBranch, title, body,
@@ -377,10 +388,12 @@ func createGitHubPR(
 			log.Infof("Using existing pull request: %s", *existingPR.HTMLURL)
 			return existingPR, nil
 		}
+		log.DecreasePadding()
 		return nil, fmt.Errorf("failed to create pull request: %w", err)
 	}
 
 	log.Infof("Pull request created: %s", *pr.HTMLURL)
+	log.DecreasePadding()
 	return pr, nil
 }
 
@@ -398,7 +411,10 @@ func waitAndMergeGitHubPR(client *ghclient.Client, pr *github.PullRequest) error
 	}
 
 	log.Info("Merging pull request...")
+	log.IncreasePadding()
+
 	if err := client.MergePullRequest(*pr.Number, "squash"); err != nil {
+		log.DecreasePadding()
 		return fmt.Errorf("failed to merge pull request: %w", err)
 	}
 
@@ -411,13 +427,18 @@ func waitAndMergeGitHubPR(client *ghclient.Client, pr *github.PullRequest) error
 		// Don't fail the entire operation if branch deletion fails
 	}
 
+	log.DecreasePadding()
 	return nil
 }
 
 func cleanup(repo *git.Repository, mainBranch, currentBranch string) error {
+	log.Info("Cleanup...")
+	log.IncreasePadding()
+
 	// Switch to main branch
 	log.Infof("Switching to main branch: %s", mainBranch)
 	if err := repo.SwitchBranch(mainBranch); err != nil {
+		log.DecreasePadding()
 		return fmt.Errorf(
 			"failed to switch to main branch: %w\n\n"+
 				"If you have local changes that conflict, please handle them manually:\n"+
@@ -430,21 +451,25 @@ func cleanup(repo *git.Repository, mainBranch, currentBranch string) error {
 	// Pull latest changes
 	log.Info("Pulling latest changes...")
 	if err := repo.Pull(); err != nil {
+		log.DecreasePadding()
 		return fmt.Errorf("failed to pull changes: %w\n\nPlease resolve any conflicts manually and run: git pull", err)
 	}
 
 	// Fetch and prune
 	log.Info("Fetching and pruning...")
 	if err := repo.FetchAndPrune(); err != nil {
+		log.DecreasePadding()
 		return fmt.Errorf("failed to fetch and prune: %w", err)
 	}
 
 	// Delete feature branch
 	log.Infof("Deleting feature branch: %s", currentBranch)
 	if err := repo.DeleteBranch(currentBranch); err != nil {
+		log.DecreasePadding()
 		return fmt.Errorf("failed to delete branch: %w", err)
 	}
 
+	log.DecreasePadding()
 	log.Info("auto-mr completed successfully!")
 	return nil
 }
