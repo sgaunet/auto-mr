@@ -26,6 +26,13 @@ var (
 const (
 	minURLParts         = 2
 	pipelinePollInterval = 5 * time.Second
+	statusSuccess       = "success"
+	statusRunning       = "running"
+	statusPending       = "pending"
+	statusCreated       = "created"
+	statusFailed        = "failed"
+	statusCanceled      = "canceled"
+	statusSkipped       = "skipped"
 )
 
 // Client represents a GitLab API client wrapper.
@@ -217,11 +224,11 @@ func (c *Client) WaitForPipeline(timeout time.Duration) (string, error) {
 	// First check if any pipelines are expected for this commit
 	if !c.hasPipelineRuns() {
 		c.log.Info("No pipeline runs configured for this merge request, proceeding without checks")
-		return "success", nil
+		return statusSuccess, nil
 	}
 
 	// Create updatable handle for pipeline status
-	c.updatableLog.Info("Waiting for pipeline to complete...")
+	c.updatableLog.Info("Waiting for pipelines to complete...")
 	c.updatableLog.IncreasePadding()
 	defer c.updatableLog.DecreasePadding()
 
@@ -241,27 +248,24 @@ func (c *Client) WaitForPipeline(timeout time.Duration) (string, error) {
 			continue
 		}
 
-		pipeline := pipelines[0]
-		status := pipeline.Status
+		// Process all pipelines, not just the first one
+		allCompleted, overallStatus := c.processPipelines(pipelines, handle, start)
 
-		if status == "running" || status == "pending" || status == "created" {
-			elapsed := time.Since(start)
-			msg := fmt.Sprintf("Pipeline status: %s - running for %s",
-				status, formatDuration(elapsed))
-			handle.Update(bullets.InfoLevel, msg)
+		if !allCompleted {
 			time.Sleep(pipelinePollInterval)
 			continue
 		}
 
+		// All pipelines completed
 		totalDuration := time.Since(start)
-		if status == "success" {
-			handle.Success("Pipeline passed - total time: " + formatDuration(totalDuration))
+		if overallStatus == statusSuccess {
+			handle.Success("All pipelines passed - total time: " + formatDuration(totalDuration))
 		} else {
-			msg := fmt.Sprintf("Pipeline completed with status: %s - total time: %s",
-				status, formatDuration(totalDuration))
+			msg := fmt.Sprintf("Pipelines completed with status: %s - total time: %s",
+				overallStatus, formatDuration(totalDuration))
 			handle.Warning(msg)
 		}
-		return status, nil
+		return overallStatus, nil
 	}
 
 	totalDuration := time.Since(start)
@@ -308,6 +312,144 @@ func (c *Client) GetMergeRequestsByBranch(sourceBranch string) ([]*gitlab.BasicM
 	}
 
 	return mrs, nil
+}
+
+// pipelineStats holds counters for pipeline statuses.
+type pipelineStats struct {
+	running          int
+	pending          int
+	created          int
+	success          int
+	failed           int
+	canceled         int
+	skipped          int
+	runningPipelines []string
+}
+
+// processPipelines evaluates all pipeline statuses and returns completion state and overall status.
+func (c *Client) processPipelines(
+	pipelines []*gitlab.PipelineInfo, handle *bullets.BulletHandle, startTime time.Time,
+) (bool, string) {
+	allCompleted := true
+	overallStatus := statusSuccess
+	elapsed := time.Since(startTime)
+
+	stats := c.collectPipelineStats(pipelines, &allCompleted, &overallStatus)
+	statusMsg := c.buildPipelineStatusMessage(stats, len(pipelines), elapsed)
+
+	handle.Update(bullets.InfoLevel, statusMsg)
+	return allCompleted, overallStatus
+}
+
+// collectPipelineStats collects statistics from all pipelines.
+func (c *Client) collectPipelineStats(
+	pipelines []*gitlab.PipelineInfo, allCompleted *bool, overallStatus *string,
+) pipelineStats {
+	stats := pipelineStats{}
+
+	for _, pipeline := range pipelines {
+		c.processPipelineStatus(pipeline, &stats, allCompleted, overallStatus)
+	}
+
+	return stats
+}
+
+// processPipelineStatus processes a single pipeline's status.
+func (c *Client) processPipelineStatus(
+	pipeline *gitlab.PipelineInfo, stats *pipelineStats, allCompleted *bool, overallStatus *string,
+) {
+	status := pipeline.Status
+
+	switch status {
+	case statusRunning:
+		c.handleRunningPipeline(pipeline, stats, allCompleted)
+	case statusPending, statusCreated:
+		c.handlePendingPipeline(status, stats, allCompleted)
+	case statusSuccess:
+		stats.success++
+	case statusFailed:
+		c.handleFailedPipeline(stats, overallStatus)
+	case statusCanceled:
+		c.handleCanceledPipeline(stats, overallStatus)
+	case statusSkipped:
+		stats.skipped++
+	default:
+		*allCompleted = false
+	}
+}
+
+// handlePendingPipeline handles a pending or created pipeline.
+func (c *Client) handlePendingPipeline(status string, stats *pipelineStats, allCompleted *bool) {
+	*allCompleted = false
+	if status == statusPending {
+		stats.pending++
+	} else {
+		stats.created++
+	}
+}
+
+// handleFailedPipeline handles a failed pipeline.
+func (c *Client) handleFailedPipeline(stats *pipelineStats, overallStatus *string) {
+	stats.failed++
+	if *overallStatus == statusSuccess {
+		*overallStatus = statusFailed
+	}
+}
+
+// handleCanceledPipeline handles a canceled pipeline.
+func (c *Client) handleCanceledPipeline(stats *pipelineStats, overallStatus *string) {
+	stats.canceled++
+	if *overallStatus == statusSuccess {
+		*overallStatus = statusCanceled
+	}
+}
+
+// handleRunningPipeline handles a running pipeline.
+func (c *Client) handleRunningPipeline(
+	pipeline *gitlab.PipelineInfo, stats *pipelineStats, allCompleted *bool,
+) {
+	*allCompleted = false
+	stats.running++
+	if pipeline.Ref != "" {
+		stats.runningPipelines = append(stats.runningPipelines, fmt.Sprintf("#%d", pipeline.ID))
+	}
+}
+
+// buildPipelineStatusMessage builds a status message from pipeline statistics.
+func (c *Client) buildPipelineStatusMessage(stats pipelineStats, total int, elapsed time.Duration) string {
+	var statusParts []string
+
+	if stats.running > 0 {
+		statusParts = append(statusParts, fmt.Sprintf("%d running", stats.running))
+	}
+	if stats.pending > 0 {
+		statusParts = append(statusParts, fmt.Sprintf("%d pending", stats.pending))
+	}
+	if stats.created > 0 {
+		statusParts = append(statusParts, fmt.Sprintf("%d created", stats.created))
+	}
+	if stats.success > 0 {
+		statusParts = append(statusParts, fmt.Sprintf("%d passed", stats.success))
+	}
+	if stats.failed > 0 {
+		statusParts = append(statusParts, fmt.Sprintf("%d failed", stats.failed))
+	}
+	if stats.canceled > 0 {
+		statusParts = append(statusParts, fmt.Sprintf("%d canceled", stats.canceled))
+	}
+	if stats.skipped > 0 {
+		statusParts = append(statusParts, fmt.Sprintf("%d skipped", stats.skipped))
+	}
+
+	statusMsg := fmt.Sprintf("Pipelines: %s (total: %d) - %s",
+		strings.Join(statusParts, ", "), total, formatDuration(elapsed))
+
+	// Add currently running pipeline IDs for context
+	if len(stats.runningPipelines) > 0 && len(stats.runningPipelines) <= 3 {
+		statusMsg += fmt.Sprintf(" [%s]", strings.Join(stats.runningPipelines, ", "))
+	}
+
+	return statusMsg
 }
 
 // hasPipelineRuns checks if there are any pipeline runs (in any state) for this MR.
