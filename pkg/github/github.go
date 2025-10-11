@@ -27,6 +27,11 @@ const (
 	maxCheckRunsPerPage  = 100
 	checkPollInterval    = 5 * time.Second
 	conclusionSuccess    = "success"
+	statusInProgress     = "in_progress"
+	statusQueued         = "queued"
+	statusCompleted      = "completed"
+	conclusionSkipped    = "skipped"
+	conclusionNeutral    = "neutral"
 )
 
 // Client represents a GitHub API client wrapper.
@@ -388,28 +393,103 @@ func (c *Client) addReviewers(pr *github.PullRequest, reviewers []string) error 
 	return nil
 }
 
+// checkStats holds counters for check run statuses.
+type checkStats struct {
+	running        int
+	queued         int
+	succeeded      int
+	failed         int
+	skipped        int
+	runningChecks  []string
+}
+
 // processCheckRuns evaluates check run statuses and returns completion state and overall conclusion.
 func (c *Client) processCheckRuns(
 	checks []*github.CheckRun, handle *bullets.BulletHandle, startTime time.Time,
 ) (bool, string) {
 	allCompleted := true
 	conclusion := conclusionSuccess
+	elapsed := time.Since(startTime)
+
+	stats := c.collectCheckStats(checks, &allCompleted, &conclusion)
+	statusMsg := c.buildCheckStatusMessage(stats, len(checks), elapsed)
+
+	handle.Update(bullets.InfoLevel, statusMsg)
+	return allCompleted, conclusion
+}
+
+// collectCheckStats collects statistics from all check runs.
+func (c *Client) collectCheckStats(
+	checks []*github.CheckRun, allCompleted *bool, conclusion *string,
+) checkStats {
+	stats := checkStats{}
 
 	for _, check := range checks {
 		status := check.GetStatus()
-		if status == "in_progress" || status == "queued" {
-			allCompleted = false
-			elapsed := time.Since(startTime)
-			handle.Update(bullets.InfoLevel, fmt.Sprintf("Workflow: %s (%s) - running for %s",
-				check.GetName(), status, formatDuration(elapsed)))
-			break
-		}
 
-		checkConclusion := check.GetConclusion()
-		if checkConclusion != conclusionSuccess && checkConclusion != "skipped" && checkConclusion != "neutral" {
-			conclusion = checkConclusion
+		switch status {
+		case statusInProgress:
+			*allCompleted = false
+			stats.running++
+			stats.runningChecks = append(stats.runningChecks, check.GetName())
+		case statusQueued:
+			*allCompleted = false
+			stats.queued++
+		case statusCompleted:
+			c.processCompletedCheck(check, &stats, conclusion)
 		}
 	}
 
-	return allCompleted, conclusion
+	return stats
+}
+
+// processCompletedCheck processes a completed check and updates stats.
+func (c *Client) processCompletedCheck(
+	check *github.CheckRun, stats *checkStats, conclusion *string,
+) {
+	checkConclusion := check.GetConclusion()
+
+	switch checkConclusion {
+	case conclusionSuccess:
+		stats.succeeded++
+	case conclusionSkipped, conclusionNeutral:
+		stats.skipped++
+	default:
+		stats.failed++
+		// Update overall conclusion if this check failed
+		if *conclusion == conclusionSuccess {
+			*conclusion = checkConclusion
+		}
+	}
+}
+
+// buildCheckStatusMessage builds a status message from check statistics.
+func (c *Client) buildCheckStatusMessage(stats checkStats, total int, elapsed time.Duration) string {
+	var statusParts []string
+
+	if stats.running > 0 {
+		statusParts = append(statusParts, fmt.Sprintf("%d running", stats.running))
+	}
+	if stats.queued > 0 {
+		statusParts = append(statusParts, fmt.Sprintf("%d queued", stats.queued))
+	}
+	if stats.succeeded > 0 {
+		statusParts = append(statusParts, fmt.Sprintf("%d passed", stats.succeeded))
+	}
+	if stats.failed > 0 {
+		statusParts = append(statusParts, fmt.Sprintf("%d failed", stats.failed))
+	}
+	if stats.skipped > 0 {
+		statusParts = append(statusParts, fmt.Sprintf("%d skipped", stats.skipped))
+	}
+
+	statusMsg := fmt.Sprintf("Checks: %s (total: %d) - %s",
+		strings.Join(statusParts, ", "), total, formatDuration(elapsed))
+
+	// Add currently running check names for context
+	if len(stats.runningChecks) > 0 && len(stats.runningChecks) <= 3 {
+		statusMsg += fmt.Sprintf(" [%s]", strings.Join(stats.runningChecks, ", "))
+	}
+
+	return statusMsg
 }
