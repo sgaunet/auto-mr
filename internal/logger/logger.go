@@ -1,12 +1,13 @@
-// Package logger provides logging utilities for gitlab-backup2s3.
+// Package logger provides logging utilities for auto-mr.
 package logger
 
 import (
-	"log/slog"
 	"os"
+
+	"github.com/sgaunet/bullets"
 )
 
-// Logger is the interface for logging in gitlab-backup2s3.
+// Logger is the interface for logging in auto-mr.
 type Logger interface {
 	Debug(msg string, args ...any)
 	Info(msg string, args ...any)
@@ -18,29 +19,28 @@ type Logger interface {
 // logLevel is the level of logging
 // Possible values of logLevel are: "debug", "info", "warn", "error"
 // Default value is "info".
-func NewLogger(logLevel string) *slog.Logger {
-	var level slog.Level
+func NewLogger(logLevel string) *bullets.Logger {
+	var level bullets.Level
 	switch logLevel {
 	case "debug":
-		level = slog.LevelDebug
+		level = bullets.DebugLevel
 	case "info":
-		level = slog.LevelInfo
+		level = bullets.InfoLevel
 	case "warn":
-		level = slog.LevelWarn
+		level = bullets.WarnLevel
 	case "error":
-		level = slog.LevelError
+		level = bullets.ErrorLevel
 	default:
-		level = slog.LevelInfo
+		level = bullets.InfoLevel
 	}
-	logHandler := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level:     level,
-		AddSource: false,
-	})
-	logger := slog.New(logHandler)
+	logger := bullets.New(os.Stdout)
+	logger.SetLevel(level)
 	return logger
 }
 
 // NoLogger creates a logger that does not log anything.
-func NoLogger() *slog.Logger {
-	return slog.New(slog.DiscardHandler)
+func NoLogger() *bullets.Logger {
+	logger := bullets.New(os.Stdout)
+	logger.SetLevel(bullets.FatalLevel)
+	return logger
 }

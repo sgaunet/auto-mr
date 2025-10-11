@@ -5,13 +5,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/google/go-github/v69/github"
 	"github.com/sgaunet/auto-mr/internal/logger"
+	"github.com/sgaunet/bullets"
 	"golang.org/x/oauth2"
 )
 
@@ -36,7 +36,7 @@ type Client struct {
 	repo     string
 	prNumber int
 	prSHA    string
-	log      *slog.Logger
+	log      *bullets.Logger
 }
 
 // Label represents a GitHub label.
@@ -65,7 +65,7 @@ func NewClient() (*Client, error) {
 }
 
 // SetLogger sets the logger for the GitHub client.
-func (c *Client) SetLogger(logger *slog.Logger) {
+func (c *Client) SetLogger(logger *bullets.Logger) {
 	c.log = logger
 	c.log.Debug("GitHub client logger configured")
 }
@@ -91,7 +91,7 @@ func (c *Client) SetRepositoryFromURL(url string) error {
 	c.owner = parts[0]
 	c.repo = parts[1]
 
-	c.log.Debug("Setting GitHub repository", "owner", c.owner, "repo", c.repo)
+	c.log.Debug(fmt.Sprintf("Setting GitHub repository: %s/%s", c.owner, c.repo))
 	// Validate repository exists
 	_, _, err := c.client.Repositories.Get(c.ctx(), c.owner, c.repo)
 	if err != nil {
@@ -138,7 +138,7 @@ func (c *Client) ListLabels() ([]*Label, error) {
 		result[i] = &Label{Name: *label.Name}
 	}
 
-	c.log.Debug("Labels retrieved", "count", len(labels))
+	c.log.Debug(fmt.Sprintf("Labels retrieved, count: %d", len(labels)))
 	return result, nil
 }
 
@@ -147,7 +147,7 @@ func (c *Client) CreatePullRequest(
 	head, base, title, body string,
 	assignees, reviewers, labels []string,
 ) (*github.PullRequest, error) {
-	c.log.Debug("Creating pull request", "head", head, "base", base)
+	c.log.Debug(fmt.Sprintf("Creating pull request from %s to %s", head, base))
 
 	newPR := &github.NewPullRequest{
 		Title: github.Ptr(title),
@@ -186,7 +186,7 @@ func (c *Client) CreatePullRequest(
 
 	c.prNumber = *pr.Number
 	c.prSHA = *pr.Head.SHA
-	c.log.Debug("Pull request created", "number", c.prNumber, "url", *pr.HTMLURL)
+	c.log.Debug(fmt.Sprintf("Pull request created - number: %d, URL: %s", c.prNumber, *pr.HTMLURL))
 	return pr, nil
 }
 
@@ -213,7 +213,7 @@ func (c *Client) GetPullRequestByBranch(head, base string) (*github.PullRequest,
 
 // WaitForWorkflows waits for all workflow runs to complete for the pull request.
 func (c *Client) WaitForWorkflows(timeout time.Duration) (string, error) {
-	c.log.Debug("Waiting for workflows", "timeout", timeout)
+	c.log.Debug(fmt.Sprintf("Waiting for workflows, timeout: %v", timeout))
 	start := time.Now()
 
 	// First check if any workflow runs are expected for this PR
@@ -245,7 +245,7 @@ func (c *Client) WaitForWorkflows(timeout time.Duration) (string, error) {
 			continue
 		}
 
-		c.log.Debug("All workflows completed", "conclusion", conclusion)
+		c.log.Debug("All workflows completed with conclusion: " + conclusion)
 		return conclusion, nil
 	}
 
@@ -254,7 +254,7 @@ func (c *Client) WaitForWorkflows(timeout time.Duration) (string, error) {
 
 // MergePullRequest merges a pull request using the specified merge method.
 func (c *Client) MergePullRequest(prNumber int, mergeMethod string) error {
-	c.log.Debug("Merging pull request", "number", prNumber, "method", mergeMethod)
+	c.log.Debug(fmt.Sprintf("Merging pull request #%d using method: %s", prNumber, mergeMethod))
 	options := &github.PullRequestOptions{
 		MergeMethod: mergeMethod, // "squash", "merge", or "rebase"
 	}
@@ -301,12 +301,12 @@ func (c *Client) hasWorkflowRuns() bool {
 		},
 	)
 	if err != nil {
-		c.log.Debug("Failed to list workflow runs, assuming workflows exist", "error", err)
+		c.log.Debug(fmt.Sprintf("Failed to list workflow runs, assuming workflows exist - error: %v", err))
 		return true // Assume workflows exist on error to be safe
 	}
 
 	if runs.GetTotalCount() > 0 {
-		c.log.Debug("Found workflow runs for PR", "count", runs.GetTotalCount())
+		c.log.Debug(fmt.Sprintf("Found workflow runs for PR, count: %d", runs.GetTotalCount()))
 		return true
 	}
 
@@ -316,12 +316,12 @@ func (c *Client) hasWorkflowRuns() bool {
 		&github.ListCheckSuiteOptions{},
 	)
 	if err != nil {
-		c.log.Debug("Failed to list check suites, assuming workflows exist", "error", err)
+		c.log.Debug(fmt.Sprintf("Failed to list check suites, assuming workflows exist - error: %v", err))
 		return true // Assume workflows exist on error to be safe
 	}
 
 	if checkSuites.GetTotal() > 0 {
-		c.log.Debug("Found check suites for PR", "count", checkSuites.GetTotal())
+		c.log.Debug(fmt.Sprintf("Found check suites for PR, count: %d", checkSuites.GetTotal()))
 		return true
 	}
 
@@ -364,7 +364,7 @@ func (c *Client) processCheckRuns(checks []*github.CheckRun) (bool, string) {
 		status := check.GetStatus()
 		if status == "in_progress" || status == "queued" {
 			allCompleted = false
-			c.log.Info("Workflow check is still running", "name", check.GetName(), "status", status)
+			c.log.Info(fmt.Sprintf("Workflow check is still running - name: %s, status: %s", check.GetName(), status))
 			break
 		}
 

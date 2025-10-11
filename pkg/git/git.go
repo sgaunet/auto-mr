@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,6 +18,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/transport/http"
 	"github.com/go-git/go-git/v5/plumbing/transport/ssh"
 	"github.com/sgaunet/auto-mr/internal/logger"
+	"github.com/sgaunet/bullets"
 	"golang.org/x/crypto/ssh/knownhosts"
 )
 
@@ -46,7 +46,7 @@ type authMethod struct {
 type Repository struct {
 	repo *git.Repository
 	auth transport.AuthMethod
-	log  *slog.Logger
+	log  *bullets.Logger
 }
 
 // Platform represents a git hosting platform.
@@ -86,13 +86,13 @@ func OpenRepository(path string) (*Repository, error) {
 }
 
 // SetLogger sets the logger for the repository.
-func (r *Repository) SetLogger(logger *slog.Logger) {
+func (r *Repository) SetLogger(logger *bullets.Logger) {
 	r.log = logger
 	r.log.Debug("Opening git repository")
 }
 
 // getAuth determines the appropriate authentication method based on the remote URL.
-func getAuth(repo *git.Repository, logger *slog.Logger) (*authMethod, error) {
+func getAuth(repo *git.Repository, logger *bullets.Logger) (*authMethod, error) {
 	remote, err := repo.Remote("origin")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get origin remote: %w", err)
@@ -104,7 +104,7 @@ func getAuth(repo *git.Repository, logger *slog.Logger) (*authMethod, error) {
 	}
 
 	url := urls[0]
-	logger.Debug("Determining authentication method", "url", url)
+	logger.Debug("Determining authentication method for URL: " + url)
 
 	// Check if it's an HTTPS URL and if tokens are available
 	if strings.HasPrefix(url, "https://") {
@@ -121,7 +121,7 @@ func getAuth(repo *git.Repository, logger *slog.Logger) (*authMethod, error) {
 }
 
 // getHTTPSAuth returns HTTP authentication for HTTPS URLs.
-func getHTTPSAuth(url string, logger *slog.Logger) (*authMethod, error) {
+func getHTTPSAuth(url string, logger *bullets.Logger) (*authMethod, error) {
 	if strings.Contains(url, "gitlab.com") {
 		if token := os.Getenv("GITLAB_TOKEN"); token != "" {
 			logger.Debug("Using GitLab token authentication")
@@ -145,7 +145,7 @@ func getHTTPSAuth(url string, logger *slog.Logger) (*authMethod, error) {
 }
 
 // setupSSHAuth configures SSH authentication using the user's SSH keys.
-func setupSSHAuth(logger *slog.Logger) (*authMethod, error) {
+func setupSSHAuth(logger *bullets.Logger) (*authMethod, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get home directory: %w", err)
@@ -161,11 +161,11 @@ func setupSSHAuth(logger *slog.Logger) (*authMethod, error) {
 	var sshAuth *ssh.PublicKeys
 	for _, keyFile := range keyFiles {
 		if _, err := os.Stat(keyFile); err == nil {
-			logger.Debug("Trying SSH key", "file", keyFile)
+			logger.Debug("Trying SSH key: " + keyFile)
 			// #nosec G304 - Reading SSH keys from standard locations is intentional
 			sshAuth, err = ssh.NewPublicKeysFromFile("git", keyFile, "")
 			if err != nil {
-				logger.Debug("Failed to load SSH key", "file", keyFile, "error", err)
+				logger.Debug(fmt.Sprintf("Failed to load SSH key %s: %v", keyFile, err))
 				// Try next key file if this one fails
 				continue
 			}
@@ -179,7 +179,7 @@ func setupSSHAuth(logger *slog.Logger) (*authMethod, error) {
 				}
 			}
 
-			logger.Debug("SSH authentication configured", "key", keyFile)
+			logger.Debug("SSH authentication configured with key: " + keyFile)
 			return &authMethod{method: sshAuth}, nil
 		}
 	}
@@ -208,7 +208,7 @@ func (r *Repository) GetMainBranch() (string, error) {
 			target := ref.Target()
 			if target.IsBranch() {
 				mainBranch := target.Short()
-				r.log.Debug("Main branch found", "branch", mainBranch)
+				r.log.Debug("Main branch found: " + mainBranch)
 				return mainBranch, nil
 			}
 		}
@@ -217,7 +217,7 @@ func (r *Repository) GetMainBranch() (string, error) {
 	// Fallback to common default branches
 	for _, defaultBranch := range []string{"main", "master"} {
 		if r.branchExists(defaultBranch) {
-			r.log.Debug("Main branch found (fallback)", "branch", defaultBranch)
+			r.log.Debug("Main branch found (fallback): " + defaultBranch)
 			return defaultBranch, nil
 		}
 	}
@@ -285,7 +285,7 @@ func (r *Repository) DetectPlatform() (Platform, error) {
 
 // PushBranch pushes the specified branch to the origin remote.
 func (r *Repository) PushBranch(branchName string) error {
-	r.log.Debug("Pushing branch", "branch", branchName)
+	r.log.Debug("Pushing branch: " + branchName)
 	err := r.repo.Push(&git.PushOptions{
 		RemoteName: "origin",
 		RefSpecs: []config.RefSpec{
@@ -296,7 +296,7 @@ func (r *Repository) PushBranch(branchName string) error {
 	if err != nil && !errors.Is(err, git.NoErrAlreadyUpToDate) {
 		return fmt.Errorf("failed to push branch: %w", err)
 	}
-	r.log.Debug("Branch pushed successfully", "branch", branchName)
+	r.log.Debug("Branch pushed successfully: " + branchName)
 	return nil
 }
 
@@ -304,7 +304,7 @@ func (r *Repository) PushBranch(branchName string) error {
 // This will fail if there are local changes that would conflict with the switch,
 // forcing the user to handle conflicts manually (matching auto-mr.sh behavior).
 func (r *Repository) SwitchBranch(branchName string) error {
-	r.log.Debug("Switching to branch using git switch", "branch", branchName)
+	r.log.Debug("Switching to branch using git switch: " + branchName)
 
 	// Use native git switch command to match shell script behavior
 	// This preserves untracked files and fails on conflicts (desired behavior)
@@ -315,7 +315,7 @@ func (r *Repository) SwitchBranch(branchName string) error {
 		return fmt.Errorf("failed to switch branch: %w\nOutput: %s", err, string(output))
 	}
 
-	r.log.Debug("Branch switched successfully", "branch", branchName)
+	r.log.Debug("Branch switched successfully: " + branchName)
 	return nil
 }
 
@@ -337,7 +337,7 @@ func (r *Repository) Pull() error {
 
 // DeleteBranch force-deletes the specified local branch using native git command.
 func (r *Repository) DeleteBranch(branchName string) error {
-	r.log.Debug("Deleting branch using git branch -D", "branch", branchName)
+	r.log.Debug("Deleting branch using git branch -D: " + branchName)
 
 	// Use native git branch -D to force delete (matching shell script behavior)
 	ctx := context.Background()
@@ -347,7 +347,7 @@ func (r *Repository) DeleteBranch(branchName string) error {
 		return fmt.Errorf("failed to delete branch: %w\nOutput: %s", err, string(output))
 	}
 
-	r.log.Debug("Branch deleted successfully", "branch", branchName)
+	r.log.Debug("Branch deleted successfully: " + branchName)
 	return nil
 }
 

@@ -4,13 +4,13 @@ package gitlab
 import (
 	"errors"
 	"fmt"
-	"log/slog"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/sgaunet/auto-mr/internal/logger"
+	"github.com/sgaunet/bullets"
 	gitlab "gitlab.com/gitlab-org/api/client-go"
 )
 
@@ -34,7 +34,7 @@ type Client struct {
 	projectID string
 	mrIID     int
 	mrSHA     string
-	log       *slog.Logger
+	log       *bullets.Logger
 }
 
 // Label represents a GitLab label.
@@ -58,7 +58,7 @@ func NewClient() (*Client, error) {
 }
 
 // SetLogger sets the logger for the GitLab client.
-func (c *Client) SetLogger(logger *slog.Logger) {
+func (c *Client) SetLogger(logger *bullets.Logger) {
 	c.log = logger
 	c.log.Debug("GitLab client logger configured")
 }
@@ -76,7 +76,7 @@ func (c *Client) SetProjectFromURL(url string) error {
 		return errInvalidURLFormat
 	}
 
-	c.log.Debug("Setting GitLab project", "path", projectPath)
+	c.log.Debug("Setting GitLab project: " + projectPath)
 	// Get project info to validate and get project ID
 	project, _, err := c.client.Projects.GetProject(projectPath, nil)
 	if err != nil {
@@ -84,7 +84,7 @@ func (c *Client) SetProjectFromURL(url string) error {
 	}
 
 	c.projectID = strconv.Itoa(project.ID)
-	c.log.Debug("GitLab project set", "id", c.projectID)
+	c.log.Debug("GitLab project set, ID: " + c.projectID)
 	return nil
 }
 
@@ -124,7 +124,7 @@ func (c *Client) ListLabels() ([]*Label, error) {
 		result[i] = &Label{Name: label.Name}
 	}
 
-	c.log.Debug("Labels retrieved", "count", len(labels))
+	c.log.Debug(fmt.Sprintf("Labels retrieved, count: %d", len(labels)))
 	return result, nil
 }
 
@@ -133,7 +133,7 @@ func (c *Client) CreateMergeRequest(
 	sourceBranch, targetBranch, title, description, assignee, reviewer string,
 	labels []string,
 ) (*gitlab.MergeRequest, error) {
-	c.log.Debug("Creating merge request", "source", sourceBranch, "target", targetBranch)
+	c.log.Debug(fmt.Sprintf("Creating merge request from %s to %s", sourceBranch, targetBranch))
 
 	// Get user IDs for assignee and reviewer
 	assigneeUser, _, err := c.client.Users.ListUsers(&gitlab.ListUsersOptions{
@@ -173,7 +173,7 @@ func (c *Client) CreateMergeRequest(
 
 	c.mrIID = mr.IID
 	c.mrSHA = mr.SHA
-	c.log.Debug("Merge request created", "iid", mr.IID, "sha", mr.SHA, "url", mr.WebURL)
+	c.log.Debug(fmt.Sprintf("Merge request created - IID: %d, SHA: %s, URL: %s", mr.IID, mr.SHA, mr.WebURL))
 	return mr, nil
 }
 
@@ -205,7 +205,7 @@ func (c *Client) GetMergeRequestByBranch(sourceBranch, targetBranch string) (*gi
 
 // WaitForPipeline waits for all pipelines to complete for the merge request.
 func (c *Client) WaitForPipeline(timeout time.Duration) (string, error) {
-	c.log.Debug("Waiting for pipeline", "timeout", timeout)
+	c.log.Debug(fmt.Sprintf("Waiting for pipeline, timeout: %v", timeout))
 	start := time.Now()
 
 	// First check if any pipelines are expected for this commit
@@ -230,12 +230,12 @@ func (c *Client) WaitForPipeline(timeout time.Duration) (string, error) {
 		status := pipeline.Status
 
 		if status == "running" || status == "pending" || status == "created" {
-			c.log.Info("Pipeline is still running", "status", status)
+			c.log.Info("Pipeline is still running, status: " + status)
 			time.Sleep(pipelinePollInterval)
 			continue
 		}
 
-		c.log.Debug("Pipeline completed", "status", status)
+		c.log.Debug("Pipeline completed with status: " + status)
 		return status, nil
 	}
 
@@ -244,7 +244,7 @@ func (c *Client) WaitForPipeline(timeout time.Duration) (string, error) {
 
 // ApproveMergeRequest approves a merge request.
 func (c *Client) ApproveMergeRequest(mrIID int) error {
-	c.log.Debug("Approving merge request", "iid", mrIID)
+	c.log.Debug(fmt.Sprintf("Approving merge request, IID: %d", mrIID))
 	_, _, err := c.client.MergeRequestApprovals.ApproveMergeRequest(c.projectID, mrIID, nil)
 	if err != nil {
 		return fmt.Errorf("failed to approve merge request: %w", err)
@@ -255,7 +255,7 @@ func (c *Client) ApproveMergeRequest(mrIID int) error {
 
 // MergeMergeRequest merges a merge request.
 func (c *Client) MergeMergeRequest(mrIID int) error {
-	c.log.Debug("Merging merge request", "iid", mrIID)
+	c.log.Debug(fmt.Sprintf("Merging merge request, IID: %d", mrIID))
 	mergeOptions := &gitlab.AcceptMergeRequestOptions{
 		Squash:             gitlab.Ptr(true),
 		ShouldRemoveSourceBranch: gitlab.Ptr(true),
@@ -293,12 +293,12 @@ func (c *Client) hasPipelineRuns() bool {
 		},
 	)
 	if err != nil {
-		c.log.Debug("Failed to list project pipelines, assuming pipelines exist", "error", err)
+		c.log.Debug(fmt.Sprintf("Failed to list project pipelines, assuming pipelines exist - error: %v", err))
 		return true // Assume pipelines exist on error to be safe
 	}
 
 	if len(pipelines) > 0 {
-		c.log.Debug("Found pipeline runs for MR", "count", len(pipelines))
+		c.log.Debug(fmt.Sprintf("Found pipeline runs for MR, count: %d", len(pipelines)))
 		return true
 	}
 
