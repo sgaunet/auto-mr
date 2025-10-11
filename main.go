@@ -4,20 +4,19 @@ package main
 import (
 	"errors"
 	"fmt"
-	"log/slog"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/google/go-github/v69/github"
 	"github.com/sgaunet/auto-mr/internal/logger"
 	"github.com/sgaunet/auto-mr/internal/ui"
 	"github.com/sgaunet/auto-mr/pkg/config"
 	"github.com/sgaunet/auto-mr/pkg/git"
-	"github.com/sgaunet/auto-mr/pkg/github"
+	ghclient "github.com/sgaunet/auto-mr/pkg/github"
 	"github.com/sgaunet/auto-mr/pkg/gitlab"
+	"github.com/sgaunet/bullets"
 	"github.com/spf13/cobra"
-
-	gogithub "github.com/google/go-github/v69/github"
 	gogitlab "gitlab.com/gitlab-org/api/client-go"
 )
 
@@ -37,7 +36,7 @@ var (
 var (
 	logLevel    string
 	showVersion bool
-	log         *slog.Logger
+	log         *bullets.Logger
 )
 
 var version = "dev"
@@ -98,7 +97,7 @@ func runAutoMR() error {
 	if err != nil {
 		return fmt.Errorf("failed to detect platform: %w", err)
 	}
-	log.Info("Platform detected", "platform", platform)
+	log.Infof("Platform detected: %s", platform)
 
 	if err := prepareRepository(repo, currentBranch); err != nil {
 		return err
@@ -117,13 +116,13 @@ func validateBranches(repo *git.Repository) (string, string, error) {
 	if err != nil {
 		return "", "", fmt.Errorf("failed to get main branch: %w", err)
 	}
-	log.Info("Main branch identified", "branch", mainBranch)
+	log.Infof("Main branch identified: %s", mainBranch)
 
 	currentBranch, err := repo.GetCurrentBranch()
 	if err != nil {
 		return "", "", fmt.Errorf("failed to get current branch: %w", err)
 	}
-	log.Info("Current branch", "branch", currentBranch)
+	log.Infof("Current branch: %s", currentBranch)
 
 	if currentBranch == mainBranch {
 		return "", "", errOnMainBranch
@@ -133,7 +132,7 @@ func validateBranches(repo *git.Repository) (string, string, error) {
 }
 
 func prepareRepository(repo *git.Repository, currentBranch string) error {
-	log.Info("Pushing branch", "branch", currentBranch)
+	log.Infof("Pushing branch: %s", currentBranch)
 	if err := repo.PushBranch(currentBranch); err != nil {
 		return fmt.Errorf("failed to push branch: %w", err)
 	}
@@ -247,19 +246,19 @@ func createGitLabMR(
 		errMsg := err.Error()
 		if strings.Contains(errMsg, "already exists") ||
 			strings.Contains(errMsg, "Another open merge request already exists") {
-			log.Warn("Merge request already exists for branch", "branch", currentBranch)
+			log.Warnf("Merge request already exists for branch: %s", currentBranch)
 			// Fetch the existing MR
 			existingMR, fetchErr := client.GetMergeRequestByBranch(currentBranch, mainBranch)
 			if fetchErr != nil {
 				return nil, fmt.Errorf("failed to fetch existing merge request: %w", fetchErr)
 			}
-			log.Info("Using existing merge request", "url", existingMR.WebURL)
+			log.Infof("Using existing merge request: %s", existingMR.WebURL)
 			return existingMR, nil
 		}
 		return nil, fmt.Errorf("failed to create merge request: %w", err)
 	}
 
-	log.Info("Merge request created", "url", mr.WebURL)
+	log.Infof("Merge request created: %s", mr.WebURL)
 	return mr, nil
 }
 
@@ -278,7 +277,7 @@ func waitAndMergeGitLabMR(client *gitlab.Client, mr *gogitlab.MergeRequest) erro
 
 	log.Info("Approving merge request...")
 	if err := client.ApproveMergeRequest(mr.IID); err != nil {
-		log.Warn("Failed to approve merge request", "error", err)
+		log.Warnf("Failed to approve merge request: %v", err)
 	}
 
 	log.Info("Merging merge request...")
@@ -313,8 +312,8 @@ func handleGitHub(cfg *config.Config, currentBranch, mainBranch, title, body str
 	return cleanup(repo, mainBranch, currentBranch)
 }
 
-func initializeGitHubClient(repo *git.Repository) (*github.Client, error) {
-	client, err := github.NewClient()
+func initializeGitHubClient(repo *git.Repository) (*ghclient.Client, error) {
+	client, err := ghclient.NewClient()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create GitHub client: %w", err)
 	}
@@ -332,7 +331,7 @@ func initializeGitHubClient(repo *git.Repository) (*github.Client, error) {
 	return client, nil
 }
 
-func selectGitHubLabels(client *github.Client) ([]string, error) {
+func selectGitHubLabels(client *ghclient.Client) ([]string, error) {
 	labels, err := client.ListLabels()
 	if err != nil {
 		return nil, fmt.Errorf("failed to list labels: %w", err)
@@ -354,11 +353,11 @@ func selectGitHubLabels(client *github.Client) ([]string, error) {
 }
 
 func createGitHubPR(
-	client *github.Client,
+	client *ghclient.Client,
 	cfg *config.Config,
 	currentBranch, mainBranch, title, body string,
 	labels []string,
-) (*gogithub.PullRequest, error) {
+) (*github.PullRequest, error) {
 	log.Info("Creating pull request...")
 	pr, err := client.CreatePullRequest(
 		currentBranch, mainBranch, title, body,
@@ -369,23 +368,23 @@ func createGitHubPR(
 	if err != nil {
 		// Check if error is about PR already existing
 		if strings.Contains(err.Error(), "pull request already exists") {
-			log.Warn("Pull request already exists for branch", "branch", currentBranch)
+			log.Warnf("Pull request already exists for branch: %s", currentBranch)
 			// Fetch the existing PR
 			existingPR, fetchErr := client.GetPullRequestByBranch(currentBranch, mainBranch)
 			if fetchErr != nil {
 				return nil, fmt.Errorf("failed to fetch existing pull request: %w", fetchErr)
 			}
-			log.Info("Using existing pull request", "url", *existingPR.HTMLURL)
+			log.Infof("Using existing pull request: %s", *existingPR.HTMLURL)
 			return existingPR, nil
 		}
 		return nil, fmt.Errorf("failed to create pull request: %w", err)
 	}
 
-	log.Info("Pull request created", "url", *pr.HTMLURL)
+	log.Infof("Pull request created: %s", *pr.HTMLURL)
 	return pr, nil
 }
 
-func waitAndMergeGitHubPR(client *github.Client, pr *gogithub.PullRequest) error {
+func waitAndMergeGitHubPR(client *ghclient.Client, pr *github.PullRequest) error {
 	log.Info("Waiting for workflows to complete...")
 	time.Sleep(pipelineStartupDelay)
 
@@ -409,7 +408,7 @@ func waitAndMergeGitHubPR(client *github.Client, pr *gogithub.PullRequest) error
 
 func cleanup(repo *git.Repository, mainBranch, currentBranch string) error {
 	// Switch to main branch
-	log.Info("Switching to main branch", "branch", mainBranch)
+	log.Infof("Switching to main branch: %s", mainBranch)
 	if err := repo.SwitchBranch(mainBranch); err != nil {
 		return fmt.Errorf(
 			"failed to switch to main branch: %w\n\n"+
@@ -433,7 +432,7 @@ func cleanup(repo *git.Repository, mainBranch, currentBranch string) error {
 	}
 
 	// Delete feature branch
-	log.Info("Deleting feature branch", "branch", currentBranch)
+	log.Infof("Deleting feature branch: %s", currentBranch)
 	if err := repo.DeleteBranch(currentBranch); err != nil {
 		return fmt.Errorf("failed to delete branch: %w", err)
 	}

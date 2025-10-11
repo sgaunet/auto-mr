@@ -1,7 +1,6 @@
 package logger_test
 
 import (
-	"log/slog"
 	"testing"
 
 	"github.com/sgaunet/auto-mr/internal/logger"
@@ -24,13 +23,12 @@ func TestNoLogger(t *testing.T) {
 func TestNewLogger(t *testing.T) {
 	tests := []struct {
 		logLevel string
-		expected slog.Level
 	}{
-		{"debug", slog.LevelDebug},
-		{"info", slog.LevelInfo},
-		{"warn", slog.LevelWarn},
-		{"error", slog.LevelError},
-		{"", slog.LevelInfo}, // Default case
+		{"debug"},
+		{"info"},
+		{"warn"},
+		{"error"},
+		{""}, // Default case
 	}
 
 	for _, tt := range tests {
