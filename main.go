@@ -36,6 +36,7 @@ var (
 var (
 	logLevel    string
 	showVersion bool
+	squash      bool
 	log         *bullets.Logger
 )
 
@@ -63,6 +64,8 @@ func init() {
 	rootCmd.PersistentFlags().StringVarP(&logLevel, "log-level", "l", "info",
 		"Set log level (debug, info, warn, error)")
 	rootCmd.Flags().BoolVarP(&showVersion, "version", "v", false, "Print version and exit")
+	rootCmd.Flags().BoolVar(&squash, "squash", false,
+		"Squash commits when merging (default: false, preserves commit history)")
 }
 
 func main() {
@@ -181,12 +184,12 @@ func handleGitLab(cfg *config.Config, currentBranch, mainBranch, title, body str
 		return err
 	}
 
-	mr, err := createGitLabMR(client, cfg, currentBranch, mainBranch, title, body, selectedLabels)
+	mr, err := createGitLabMR(client, cfg, currentBranch, mainBranch, title, body, selectedLabels, squash)
 	if err != nil {
 		return err
 	}
 
-	if err := waitAndMergeGitLabMR(client, mr); err != nil {
+	if err := waitAndMergeGitLabMR(client, mr, squash); err != nil {
 		return err
 	}
 
@@ -238,12 +241,13 @@ func createGitLabMR(
 	cfg *config.Config,
 	currentBranch, mainBranch, title, body string,
 	labels []string,
+	squash bool,
 ) (*gogitlab.MergeRequest, error) {
 	log.IncreasePadding()
 	log.Info("Creating merge request...")
 	mr, err := client.CreateMergeRequest(
 		currentBranch, mainBranch, title, body,
-		cfg.GitLab.Assignee, cfg.GitLab.Reviewer, labels,
+		cfg.GitLab.Assignee, cfg.GitLab.Reviewer, labels, squash,
 	)
 	if err != nil {
 		// Check if error is about MR already existing
@@ -268,7 +272,7 @@ func createGitLabMR(
 	return mr, nil
 }
 
-func waitAndMergeGitLabMR(client *gitlab.Client, mr *gogitlab.MergeRequest) error {
+func waitAndMergeGitLabMR(client *gitlab.Client, mr *gogitlab.MergeRequest, squash bool) error {
 	log.Info("Waiting for pipeline to complete...")
 	time.Sleep(pipelineStartupDelay)
 
@@ -289,7 +293,7 @@ func waitAndMergeGitLabMR(client *gitlab.Client, mr *gogitlab.MergeRequest) erro
 		log.Warnf("Failed to approve merge request: %v", err)
 	}
 
-	if err := client.MergeMergeRequest(mr.IID); err != nil {
+	if err := client.MergeMergeRequest(mr.IID, squash); err != nil {
 		log.DecreasePadding()
 		return fmt.Errorf("failed to merge MR: %w", err)
 	}
@@ -315,7 +319,7 @@ func handleGitHub(cfg *config.Config, currentBranch, mainBranch, title, body str
 		return err
 	}
 
-	if err := waitAndMergeGitHubPR(client, pr); err != nil {
+	if err := waitAndMergeGitHubPR(client, pr, squash); err != nil {
 		return err
 	}
 
@@ -397,7 +401,7 @@ func createGitHubPR(
 	return pr, nil
 }
 
-func waitAndMergeGitHubPR(client *ghclient.Client, pr *github.PullRequest) error {
+func waitAndMergeGitHubPR(client *ghclient.Client, pr *github.PullRequest, squash bool) error {
 	log.Info("Waiting for workflows to complete...")
 	time.Sleep(pipelineStartupDelay)
 
@@ -413,7 +417,8 @@ func waitAndMergeGitHubPR(client *ghclient.Client, pr *github.PullRequest) error
 	log.Info("Merging pull request...")
 	log.IncreasePadding()
 
-	if err := client.MergePullRequest(*pr.Number, "squash"); err != nil {
+	mergeMethod := ghclient.GetMergeMethod(squash)
+	if err := client.MergePullRequest(*pr.Number, mergeMethod); err != nil {
 		log.DecreasePadding()
 		return fmt.Errorf("failed to merge pull request: %w", err)
 	}

@@ -279,6 +279,7 @@ func (c *Client) WaitForWorkflows(timeout time.Duration) (string, error) {
 }
 
 // MergePullRequest merges a pull request using the specified merge method.
+// mergeMethod can be "merge", "squash", or "rebase".
 func (c *Client) MergePullRequest(prNumber int, mergeMethod string) error {
 	c.log.Debug(fmt.Sprintf("Merging pull request #%d using method: %s", prNumber, mergeMethod))
 	options := &github.PullRequestOptions{
@@ -357,6 +358,15 @@ func (c *Client) hasWorkflowRuns() bool {
 // ctx returns the context for API calls.
 func (c *Client) ctx() context.Context {
 	return context.Background()
+}
+
+// GetMergeMethod returns the appropriate merge method string based on squash flag.
+// Returns "squash" if squash is true, otherwise "merge".
+func GetMergeMethod(squash bool) string {
+	if squash {
+		return "squash"
+	}
+	return "merge"
 }
 
 // formatDuration formats a duration into a human-readable string.
