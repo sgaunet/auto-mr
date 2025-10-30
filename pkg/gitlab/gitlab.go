@@ -144,7 +144,7 @@ func (c *Client) ListLabels() ([]*Label, error) {
 // CreateMergeRequest creates a new merge request with assignees, reviewers, and labels.
 func (c *Client) CreateMergeRequest(
 	sourceBranch, targetBranch, title, description, assignee, reviewer string,
-	labels []string,
+	labels []string, squash bool,
 ) (*gitlab.MergeRequest, error) {
 	c.log.Debug(fmt.Sprintf("Creating merge request from %s to %s", sourceBranch, targetBranch))
 
@@ -175,7 +175,7 @@ func (c *Client) CreateMergeRequest(
 		AssigneeID:         &assigneeID,
 		ReviewerIDs:        &reviewerIDs,
 		Labels:             labelOptions,
-		Squash:             gitlab.Ptr(true),
+		Squash:             gitlab.Ptr(squash),
 		RemoveSourceBranch: gitlab.Ptr(true),
 	}
 
@@ -285,10 +285,10 @@ func (c *Client) ApproveMergeRequest(mrIID int) error {
 }
 
 // MergeMergeRequest merges a merge request.
-func (c *Client) MergeMergeRequest(mrIID int) error {
+func (c *Client) MergeMergeRequest(mrIID int, squash bool) error {
 	c.log.Debug(fmt.Sprintf("Merging merge request, IID: %d", mrIID))
 	mergeOptions := &gitlab.AcceptMergeRequestOptions{
-		Squash:             gitlab.Ptr(true),
+		Squash:             gitlab.Ptr(squash),
 		ShouldRemoveSourceBranch: gitlab.Ptr(true),
 	}
 

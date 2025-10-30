@@ -63,13 +63,26 @@ export GITHUB_TOKEN="your-github-token"
 auto-mr
 ```
 
+### Options
+
+- `--squash`: Squash commits when merging (default: false, preserves commit history)
+- `--log-level`: Set log level (debug, info, warn, error) (default: "info")
+- `--version`: Print version and exit
+
+Example with squash:
+```bash
+auto-mr --squash
+```
+
+### Workflow
+
 The tool will:
 1. Detect if you're using GitLab or GitHub
 2. Push your current branch
 3. Let you select labels interactively
 4. Create a merge/pull request with proper assignee and reviewer
 5. Wait for CI/CD pipeline completion
-6. Auto-approve (GitLab only) and merge the request
+6. Auto-approve (GitLab only) and merge the request (squash if --squash flag is used)
 7. Switch back to main branch and clean up
 
 ## Replaced Dependencies
