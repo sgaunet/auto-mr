@@ -14,16 +14,30 @@ A Go-based automated merge request tool for GitLab and GitHub repositories. This
 
 ## Installation
 
+### From Releases
+
+* Download the latest release from the [releases page](https://github.com/sgaunet/auto-mr/releases).
+* Install the binary in /usr/local/bin or any other directory in your PATH.
+
+### With go
+
 ```bash
 go install github.com/sgaunet/auto-mr@latest
 ```
 
-Or build from source:
+### From source:
 
 ```bash
 git clone https://github.com/sgaunet/auto-mr
 cd auto-mr
 go build -o auto-mr
+```
+
+### Homebrew
+
+```bash
+brew tap sgaunet/homebrew-tools
+brew install sgaunet/tools/auto-mr
 ```
 
 ## Configuration
