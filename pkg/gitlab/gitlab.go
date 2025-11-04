@@ -287,15 +287,16 @@ func (c *Client) WaitForPipeline(timeout time.Duration) (string, error) {
 			continue
 		}
 
-		// All pipelines completed
+		// All pipelines completed - display final summary
 		totalDuration := time.Since(start)
 		if overallStatus == statusSuccess {
-			c.updatableLog.Success("All pipelines passed - total time: " + formatDuration(totalDuration))
+			c.updatableLog.Success(fmt.Sprintf("%s Pipeline completed successfully - total time: %s",
+				iconSuccess, formatDuration(totalDuration)))
 		} else {
-			msg := fmt.Sprintf("Pipelines completed with status: %s - total time: %s",
-				overallStatus, formatDuration(totalDuration))
+			msg := fmt.Sprintf("%s Pipeline failed - total time: %s",
+				iconFailed, formatDuration(totalDuration))
 			handle := c.updatableLog.InfoHandle(msg)
-			handle.Warning(msg)
+			handle.Error(msg)
 		}
 		return overallStatus, nil
 	}
@@ -886,6 +887,16 @@ func (jt *jobTracker) update(newJobs []*Job, logger *bullets.UpdatableLogger) []
 	newJobIDs := make(map[int]bool)
 
 	for _, newJob := range newJobs {
+		// Skip nil jobs or jobs with invalid IDs
+		if newJob == nil || newJob.ID == 0 {
+			continue
+		}
+
+		// Handle duplicate job IDs - only process first occurrence
+		if newJobIDs[newJob.ID] {
+			continue
+		}
+
 		newJobIDs[newJob.ID] = true
 		oldJob, exists := jt.getJob(newJob.ID)
 
@@ -895,25 +906,27 @@ func (jt *jobTracker) update(newJobs []*Job, logger *bullets.UpdatableLogger) []
 			handle := logger.InfoHandle(statusText)
 			jt.setHandle(newJob.ID, handle)
 			jt.setJob(newJob.ID, newJob)
+			// Start pulse animation for running jobs
+			if newJob.Status == statusRunning {
+				handle.Pulse(5*time.Second, statusText)
+			}
 			transitions = append(transitions, fmt.Sprintf("Job %d started: %s/%s", newJob.ID, newJob.Stage, newJob.Name))
-		} else if oldJob.Status != newJob.Status || oldJob.Duration != newJob.Duration {
-			// Status changed or duration updated - update handle
-			handle, handleExists := jt.getHandle(newJob.ID)
-			if handleExists {
-				jt.updateHandleForJob(handle, newJob)
-			}
+		} else if oldJob.Status != newJob.Status {
+			// Status changed - update display and handle pulse animation
+			wasPulsing := oldJob.Status == statusRunning
+			isPulsing := newJob.Status == statusRunning
+
+			jt.updateHandleForJob(logger, newJob, wasPulsing, isPulsing)
 			jt.setJob(newJob.ID, newJob)
-			if oldJob.Status != newJob.Status {
-				transitions = append(transitions, fmt.Sprintf("Job %d: %s -> %s", newJob.ID, oldJob.Status, newJob.Status))
-			}
+			transitions = append(transitions, fmt.Sprintf("Job %d: %s -> %s", newJob.ID, oldJob.Status, newJob.Status))
 		} else {
-			// No status or duration change, but update running jobs to refresh elapsed time
+			// No status change, just update job data (timestamps/duration may have changed)
 			jt.setJob(newJob.ID, newJob)
+			// Update text for running jobs to show elapsed time (without re-pulsing)
 			if newJob.Status == statusRunning && newJob.StartedAt != nil {
-				// Update handle to show live elapsed time for running jobs
-				handle, handleExists := jt.getHandle(newJob.ID)
-				if handleExists {
-					jt.updateHandleForJob(handle, newJob)
+				if handle, exists := jt.getHandle(newJob.ID); exists {
+					statusText := formatJobStatus(newJob)
+					handle.Update(bullets.InfoLevel, statusText)
 				}
 			}
 		}
@@ -931,26 +944,32 @@ func (jt *jobTracker) update(newJobs []*Job, logger *bullets.UpdatableLogger) []
 	return transitions
 }
 
-// updateHandleForJob updates the bullet handle based on job status using formatJobStatus.
-func (jt *jobTracker) updateHandleForJob(handle *bullets.BulletHandle, job *Job) {
+// updateHandleForJob updates the display for a job when status changes.
+// wasPulsing and isPulsing control whether to start or stop the pulse animation.
+func (jt *jobTracker) updateHandleForJob(logger *bullets.UpdatableLogger, job *Job, wasPulsing, isPulsing bool) {
 	statusText := formatJobStatus(job)
 
-	switch job.Status {
-	case statusSuccess:
-		handle.Success(statusText)
-	case statusFailed:
-		handle.Error(statusText)
-	case statusCanceled:
-		handle.Warning(statusText)
-	case statusSkipped:
-		handle.Update(bullets.InfoLevel, statusText)
-	case statusRunning:
-		// Use Pulse for animated spinner effect on running jobs (5s matches polling interval)
-		handle.Pulse(5*time.Second, statusText)
-	case statusPending, statusCreated:
-		handle.Update(bullets.InfoLevel, statusText)
-	default:
-		handle.Update(bullets.InfoLevel, statusText)
+	if handle, exists := jt.getHandle(job.ID); exists {
+		switch job.Status {
+		case statusSuccess:
+			handle.Success(statusText)
+		case statusFailed:
+			handle.Error(statusText)
+		case statusCanceled:
+			handle.Warning(statusText)
+		case statusSkipped:
+			handle.Update(bullets.InfoLevel, statusText)
+		case statusRunning:
+			handle.Update(bullets.InfoLevel, statusText)
+			// Only start pulse animation when transitioning TO running status
+			if isPulsing && !wasPulsing {
+				handle.Pulse(5*time.Second, statusText)
+			}
+		case statusPending, statusCreated:
+			handle.Update(bullets.InfoLevel, statusText)
+		default:
+			handle.Update(bullets.InfoLevel, statusText)
+		}
 	}
 }
 

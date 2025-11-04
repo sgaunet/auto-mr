@@ -293,14 +293,16 @@ func (c *Client) WaitForWorkflows(timeout time.Duration) (string, error) {
 			continue
 		}
 
+		// All workflows completed - display final summary
 		totalDuration := time.Since(start)
 		if conclusion == conclusionSuccess {
-			c.updatableLog.Success("All checks passed - total time: " + formatDuration(totalDuration))
+			c.updatableLog.Success(fmt.Sprintf("%s Workflows completed successfully - total time: %s",
+				iconSuccess, formatDuration(totalDuration)))
 		} else {
-			msg := fmt.Sprintf("Checks completed with status: %s - total time: %s",
-				conclusion, formatDuration(totalDuration))
+			msg := fmt.Sprintf("%s Workflows failed - total time: %s",
+				iconFailed, formatDuration(totalDuration))
 			handle := c.updatableLog.InfoHandle(msg)
-			handle.Warning(msg)
+			handle.Error(msg)
 		}
 		return conclusion, nil
 	}
@@ -481,6 +483,11 @@ func (c *Client) processWorkflows(handle *bullets.BulletHandle, startTime time.T
 
 // processCheckRunsFallback fetches check runs and processes them as fallback.
 func (c *Client) processCheckRunsFallback(handle *bullets.BulletHandle, startTime time.Time) (bool, string) {
+	// Create handle if not provided (defensive programming for fallback scenarios)
+	if handle == nil {
+		handle = c.updatableLog.InfoHandle("Checking workflow status...")
+	}
+
 	checkRuns, _, err := c.client.Checks.ListCheckRunsForRef(
 		c.ctx(), c.owner, c.repo, c.prSHA,
 		&github.ListCheckRunsOptions{
@@ -947,6 +954,16 @@ func (ct *checkTracker) update(newChecks []*JobInfo, logger *bullets.UpdatableLo
 	newCheckIDs := make(map[int64]bool)
 
 	for _, newCheck := range newChecks {
+		// Skip nil checks or checks with invalid IDs
+		if newCheck == nil || newCheck.ID == 0 {
+			continue
+		}
+
+		// Handle duplicate check IDs - only process first occurrence
+		if newCheckIDs[newCheck.ID] {
+			continue
+		}
+
 		newCheckIDs[newCheck.ID] = true
 		oldCheck, exists := ct.getCheck(newCheck.ID)
 
@@ -956,23 +973,27 @@ func (ct *checkTracker) update(newChecks []*JobInfo, logger *bullets.UpdatableLo
 			handle := logger.InfoHandle(statusText)
 			ct.setHandle(newCheck.ID, handle)
 			ct.setCheck(newCheck.ID, newCheck)
+			// Start pulse animation for running jobs
+			if newCheck.Status == statusInProgress {
+				handle.Pulse(5*time.Second, statusText)
+			}
 			transitions = append(transitions, fmt.Sprintf("Job %d started: %s", newCheck.ID, newCheck.Name))
 		} else if ct.hasStatusChanged(oldCheck, newCheck) {
-			// Status or conclusion changed - update handle
-			handle, handleExists := ct.getHandle(newCheck.ID)
-			if handleExists {
-				ct.updateHandleForCheck(handle, newCheck)
-			}
+			// Status or conclusion changed - update display and handle pulse animation
+			wasPulsing := oldCheck.Status == statusInProgress
+			isPulsing := newCheck.Status == statusInProgress
+
+			ct.updateHandleForCheck(logger, newCheck, wasPulsing, isPulsing)
 			ct.setCheck(newCheck.ID, newCheck)
 			transitions = append(transitions, ct.formatTransition(oldCheck, newCheck))
 		} else {
 			// No status change, just update check data (timestamps may have changed)
 			ct.setCheck(newCheck.ID, newCheck)
-			// Update handle to refresh duration for running jobs
+			// Update text for running jobs to show elapsed time (without re-pulsing)
 			if newCheck.Status == statusInProgress {
-				handle, handleExists := ct.getHandle(newCheck.ID)
-				if handleExists {
-					ct.updateHandleForCheck(handle, newCheck)
+				if handle, exists := ct.getHandle(newCheck.ID); exists {
+					statusText := formatJobStatus(newCheck)
+					handle.Update(bullets.InfoLevel, statusText)
 				}
 			}
 		}
@@ -1011,29 +1032,33 @@ func (ct *checkTracker) formatTransition(oldCheck, newCheck *JobInfo) string {
 }
 
 // updateHandleForCheck updates the bullet handle based on job status and conclusion using formatJobStatus.
-func (ct *checkTracker) updateHandleForCheck(handle *bullets.BulletHandle, check *JobInfo) {
+// wasPulsing and isPulsing control whether to start or stop the pulse animation.
+func (ct *checkTracker) updateHandleForCheck(logger *bullets.UpdatableLogger, check *JobInfo, wasPulsing, isPulsing bool) {
 	statusText := formatJobStatus(check)
 
 	// Handle completed jobs by conclusion
 	if check.Status == statusCompleted {
-		switch check.Conclusion {
-		case conclusionSuccess:
-			handle.Success(statusText)
-		case conclusionSkipped, conclusionNeutral:
-			handle.Update(bullets.InfoLevel, statusText)
-		default:
-			// Failed, cancelled, or other non-success conclusion
-			handle.Error(statusText)
+		if handle, exists := ct.getHandle(check.ID); exists {
+			switch check.Conclusion {
+			case conclusionSuccess:
+				handle.Success(statusText)
+			case conclusionSkipped, conclusionNeutral:
+				handle.Update(bullets.InfoLevel, statusText)
+			default:
+				// Failed, cancelled, or other non-success conclusion
+				handle.Error(statusText)
+			}
 		}
 		return
 	}
 
 	// Handle in-progress or queued jobs
-	if check.Status == statusInProgress {
-		// Use Pulse for animated spinner effect on running jobs (5s matches polling interval)
-		handle.Pulse(5*time.Second, statusText)
-	} else {
+	if handle, exists := ct.getHandle(check.ID); exists {
 		handle.Update(bullets.InfoLevel, statusText)
+		// Only start pulse animation when transitioning TO running status
+		if isPulsing && !wasPulsing {
+			handle.Pulse(5*time.Second, statusText)
+		}
 	}
 }
 
