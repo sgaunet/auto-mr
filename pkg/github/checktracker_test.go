@@ -340,28 +340,30 @@ func TestCheckTrackerHandleLifecycle(t *testing.T) {
 		t.Error("Handle should be created for new check")
 	}
 
-	// Status change - should update handle
+	// Status change to running - should create spinner (not handle)
 	checks2 := []*JobInfo{
 		{ID: 1, Name: "check1", Status: statusInProgress},
 	}
 	tracker.update(checks2, logger)
 
-	handle, hasHandle := tracker.getHandle(1)
-	if !hasHandle {
-		t.Error("Handle should still exist after update")
+	_, hasSpinner := tracker.getSpinner(1)
+	if !hasSpinner {
+		t.Error("Spinner should exist for running check")
 	}
-	if handle == nil {
-		t.Error("Handle should not be nil")
+	// Handle should be removed when spinner is created
+	_, hasHandle = tracker.getHandle(1)
+	if hasHandle {
+		t.Error("Handle should not exist for running check (replaced by spinner)")
 	}
 
-	// Completion - should update handle
+	// Completion - spinner should be stopped and replaced with final message
 	checks3 := []*JobInfo{
 		{ID: 1, Name: "check1", Status: statusCompleted, Conclusion: conclusionSuccess},
 	}
 	tracker.update(checks3, logger)
 
-	_, hasHandle = tracker.getHandle(1)
-	if !hasHandle {
-		t.Error("Handle should still exist after completion")
+	_, hasSpinner = tracker.getSpinner(1)
+	if hasSpinner {
+		t.Error("Spinner should be removed after completion")
 	}
 }

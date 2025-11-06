@@ -16,12 +16,12 @@ import (
 )
 
 var (
-	errTokenRequired     = errors.New("GITLAB_TOKEN environment variable is required")
-	errInvalidURLFormat  = errors.New("invalid GitLab URL format")
-	errAssigneeNotFound  = errors.New("failed to find assignee user")
-	errReviewerNotFound  = errors.New("failed to find reviewer user")
-	errPipelineTimeout   = errors.New("timeout waiting for pipeline completion")
-	errMRNotFound        = errors.New("no merge request found for branch")
+	errTokenRequired    = errors.New("GITLAB_TOKEN environment variable is required")
+	errInvalidURLFormat = errors.New("invalid GitLab URL format")
+	errAssigneeNotFound = errors.New("failed to find assignee user")
+	errReviewerNotFound = errors.New("failed to find reviewer user")
+	errPipelineTimeout  = errors.New("timeout waiting for pipeline completion")
+	errMRNotFound       = errors.New("no merge request found for branch")
 )
 
 const (
@@ -33,25 +33,17 @@ const (
 	statusPending          = "pending"
 	statusCreated          = "created"
 	statusFailed           = "failed"
-	statusCanceled         = "canceled"
-	statusSkipped          = "skipped"
-
-	// Status icons for visual representation
-	iconRunning  = "⟳"
-	iconPending  = "○"
-	iconSuccess  = "✓"
-	iconFailed   = "✗"
-	iconCanceled = "⊘"
-	iconSkipped  = "○"
+	statusCanceled = "canceled"
+	statusSkipped  = "skipped"
 )
 
 // Client represents a GitLab API client wrapper.
 type Client struct {
-	client      *gitlab.Client
-	projectID   string
-	mrIID       int
-	mrSHA       string
-	log         *bullets.Logger
+	client       *gitlab.Client
+	projectID    string
+	mrIID        int
+	mrSHA        string
+	log          *bullets.Logger
 	updatableLog *bullets.UpdatableLogger
 }
 
@@ -73,11 +65,12 @@ type Job struct {
 	WebURL     string
 }
 
-// jobTracker tracks jobs and their display handles with thread-safe access.
+// jobTracker tracks jobs and their display handles/spinners with thread-safe access.
 type jobTracker struct {
-	mu      sync.RWMutex
-	jobs    map[int]*Job
-	handles map[int]*bullets.BulletHandle
+	mu       sync.RWMutex
+	jobs     map[int]*Job
+	handles  map[int]*bullets.BulletHandle
+	spinners map[int]*bullets.Spinner
 }
 
 // NewClient creates a new GitLab client.
@@ -93,8 +86,8 @@ func NewClient() (*Client, error) {
 	}
 
 	return &Client{
-		client:      client,
-		log:         logger.NoLogger(),
+		client:       client,
+		log:          logger.NoLogger(),
 		updatableLog: bullets.NewUpdatable(os.Stdout),
 	}, nil
 }
@@ -273,8 +266,7 @@ func (c *Client) WaitForPipeline(timeout time.Duration) (string, error) {
 		}
 
 		if len(pipelines) == 0 {
-			elapsed := time.Since(start)
-			c.updatableLog.Info(fmt.Sprintf("Waiting for CI to start... (%s)", formatDuration(elapsed)))
+			// Wait silently for pipelines to appear (they'll show as individual spinners when they start)
 			time.Sleep(pipelinePollInterval)
 			continue
 		}
@@ -290,11 +282,11 @@ func (c *Client) WaitForPipeline(timeout time.Duration) (string, error) {
 		// All pipelines completed - display final summary
 		totalDuration := time.Since(start)
 		if overallStatus == statusSuccess {
-			c.updatableLog.Success(fmt.Sprintf("%s Pipeline completed successfully - total time: %s",
-				iconSuccess, formatDuration(totalDuration)))
+			c.updatableLog.Success(fmt.Sprintf("Pipeline completed successfully - total time: %s",
+				formatDuration(totalDuration)))
 		} else {
-			msg := fmt.Sprintf("%s Pipeline failed - total time: %s",
-				iconFailed, formatDuration(totalDuration))
+			msg := fmt.Sprintf("Pipeline failed - total time: %s",
+				formatDuration(totalDuration))
 			handle := c.updatableLog.InfoHandle(msg)
 			handle.Error(msg)
 		}
@@ -321,7 +313,7 @@ func (c *Client) ApproveMergeRequest(mrIID int) error {
 func (c *Client) MergeMergeRequest(mrIID int, squash bool) error {
 	c.log.Debug(fmt.Sprintf("Merging merge request, IID: %d", mrIID))
 	mergeOptions := &gitlab.AcceptMergeRequestOptions{
-		Squash:             gitlab.Ptr(squash),
+		Squash:                   gitlab.Ptr(squash),
 		ShouldRemoveSourceBranch: gitlab.Ptr(true),
 	}
 
@@ -439,27 +431,6 @@ func (c *Client) processPipelinesWithJobTracking(
 				overallStatus = statusCanceled
 			}
 		}
-	}
-
-	return allCompleted, overallStatus
-}
-
-// processPipelines evaluates all pipeline statuses and returns completion state and overall status.
-func (c *Client) processPipelines(
-	pipelines []*gitlab.PipelineInfo, handle *bullets.BulletHandle, startTime time.Time,
-) (bool, string) {
-	allCompleted := true
-	overallStatus := statusSuccess
-	elapsed := time.Since(startTime)
-
-	// Try to fetch and display job-level information
-	jobsDisplayed := c.displayPipelineJobs(pipelines, handle, &allCompleted, &overallStatus, elapsed)
-
-	// Fallback to aggregate view if job fetching failed
-	if !jobsDisplayed {
-		stats := c.collectPipelineStats(pipelines, &allCompleted, &overallStatus)
-		statusMsg := c.buildPipelineStatusMessage(stats, len(pipelines), elapsed)
-		handle.Update(bullets.InfoLevel, statusMsg)
 	}
 
 	return allCompleted, overallStatus
@@ -598,133 +569,6 @@ func (c *Client) hasPipelineRuns() bool {
 	return false
 }
 
-// displayPipelineJobs fetches and displays individual job statuses for all pipelines.
-// Returns true if jobs were successfully displayed, false to trigger fallback to aggregate view.
-func (c *Client) displayPipelineJobs(
-	pipelines []*gitlab.PipelineInfo,
-	handle *bullets.BulletHandle,
-	allCompleted *bool,
-	overallStatus *string,
-	elapsed time.Duration,
-) bool {
-	if len(pipelines) == 0 {
-		return false
-	}
-
-	// Track job statistics across all pipelines
-	var allJobs []*Job
-	jobsByStatus := make(map[string]int)
-
-	// Fetch jobs for all pipelines
-	for _, pipeline := range pipelines {
-		jobs, err := c.fetchPipelineJobs(pipeline.ID)
-		if err != nil {
-			c.log.Debug(fmt.Sprintf(
-				"Failed to fetch jobs for pipeline %d, falling back to aggregate view: %v",
-				pipeline.ID, err))
-			return false
-		}
-		allJobs = append(allJobs, jobs...)
-	}
-
-	// If no jobs found, fall back to aggregate view
-	if len(allJobs) == 0 {
-		c.log.Debug("No jobs found in pipelines, falling back to aggregate view")
-		return false
-	}
-
-	// Analyze job statuses and count by status
-	c.analyzeJobStatuses(allJobs, jobsByStatus, allCompleted, overallStatus)
-
-	// Build status message showing job-level details
-	statusMsg := c.buildJobStatusMessage(jobsByStatus, allJobs, elapsed)
-	handle.Update(bullets.InfoLevel, statusMsg)
-
-	return true
-}
-
-// analyzeJobStatuses analyzes all jobs and updates completion status and counts.
-func (c *Client) analyzeJobStatuses(
-	allJobs []*Job,
-	jobsByStatus map[string]int,
-	allCompleted *bool,
-	overallStatus *string,
-) {
-	for _, job := range allJobs {
-		jobsByStatus[job.Status]++
-
-		// Update completion status
-		switch job.Status {
-		case statusRunning, statusPending, statusCreated:
-			*allCompleted = false
-		case statusFailed:
-			if *overallStatus == statusSuccess {
-				*overallStatus = statusFailed
-			}
-		case statusCanceled:
-			if *overallStatus == statusSuccess {
-				*overallStatus = statusCanceled
-			}
-		}
-	}
-}
-
-// buildJobStatusMessage creates a status message from job statistics.
-func (c *Client) buildJobStatusMessage(jobsByStatus map[string]int, allJobs []*Job, elapsed time.Duration) string {
-	var statusParts []string
-
-	if count := jobsByStatus[statusRunning]; count > 0 {
-		statusParts = append(statusParts, fmt.Sprintf("%d running", count))
-	}
-	if count := jobsByStatus[statusPending]; count > 0 {
-		statusParts = append(statusParts, fmt.Sprintf("%d pending", count))
-	}
-	if count := jobsByStatus[statusCreated]; count > 0 {
-		statusParts = append(statusParts, fmt.Sprintf("%d created", count))
-	}
-	if count := jobsByStatus[statusSuccess]; count > 0 {
-		statusParts = append(statusParts, fmt.Sprintf("%d passed", count))
-	}
-	if count := jobsByStatus[statusFailed]; count > 0 {
-		statusParts = append(statusParts, fmt.Sprintf("%d failed", count))
-	}
-	if count := jobsByStatus[statusCanceled]; count > 0 {
-		statusParts = append(statusParts, fmt.Sprintf("%d canceled", count))
-	}
-	if count := jobsByStatus[statusSkipped]; count > 0 {
-		statusParts = append(statusParts, fmt.Sprintf("%d skipped", count))
-	}
-
-	statusMsg := fmt.Sprintf("Jobs: %s (total: %d) - %s",
-		strings.Join(statusParts, ", "), len(allJobs), formatDuration(elapsed))
-
-	// Add details for running/failed jobs
-	jobDetails := c.collectJobDetails(allJobs)
-	if len(jobDetails) > 0 {
-		statusMsg += fmt.Sprintf(" [%s]", strings.Join(jobDetails, ", "))
-	}
-
-	return statusMsg
-}
-
-// collectJobDetails collects details for running or failed jobs (limited for readability).
-func (c *Client) collectJobDetails(allJobs []*Job) []string {
-	var jobDetails []string
-	for _, job := range allJobs {
-		if job.Status == statusRunning || job.Status == statusFailed {
-			detail := fmt.Sprintf("%s:%s", job.Stage, job.Name)
-			if job.Status == statusRunning && job.Duration > 0 {
-				detail += fmt.Sprintf("(%s)", formatDuration(time.Duration(job.Duration)*time.Second))
-			}
-			jobDetails = append(jobDetails, detail)
-			if len(jobDetails) >= maxJobDetailsToDisplay {
-				break
-			}
-		}
-	}
-	return jobDetails
-}
-
 // fetchPipelineJobs fetches all jobs for a given pipeline with pagination support.
 func (c *Client) fetchPipelineJobs(pipelineID int) ([]*Job, error) {
 	c.log.Debug(fmt.Sprintf("Fetching jobs for pipeline %d", pipelineID))
@@ -787,28 +631,12 @@ func formatDuration(d time.Duration) string {
 	return fmt.Sprintf("%ds", seconds)
 }
 
-// formatJobStatus formats a job status with icon and duration.
-// Returns a formatted string like "⟳ build (running, 1m 23s)" or "✓ test (success, 45s)".
+// formatJobStatus formats a job status with duration.
+// Returns a formatted string like "build (running, 1m 23s)" or "test (success, 45s)".
+// Icons are added by the bullets library methods (Success/Error/etc), not by this function.
 func formatJobStatus(job *Job) string {
 	if job == nil {
 		return ""
-	}
-
-	// Select icon based on status
-	icon := iconPending
-	switch job.Status {
-	case statusRunning:
-		icon = iconRunning
-	case statusSuccess:
-		icon = iconSuccess
-	case statusFailed:
-		icon = iconFailed
-	case statusCanceled:
-		icon = iconCanceled
-	case statusSkipped:
-		icon = iconSkipped
-	case statusPending, statusCreated:
-		icon = iconPending
 	}
 
 	// Build job name with stage prefix if available
@@ -827,18 +655,19 @@ func formatJobStatus(job *Job) string {
 		durationStr = formatDuration(elapsed)
 	}
 
-	// Format the complete status string
+	// Format the complete status string (without icon - bullets library adds those)
 	if durationStr != "" {
-		return fmt.Sprintf("%s %s (%s, %s)", icon, jobName, job.Status, durationStr)
+		return fmt.Sprintf("%s (%s, %s)", jobName, job.Status, durationStr)
 	}
-	return fmt.Sprintf("%s %s (%s)", icon, jobName, job.Status)
+	return fmt.Sprintf("%s (%s)", jobName, job.Status)
 }
 
 // newJobTracker creates a new job tracker with initialized maps.
 func newJobTracker() *jobTracker {
 	return &jobTracker{
-		jobs:    make(map[int]*Job),
-		handles: make(map[int]*bullets.BulletHandle),
+		jobs:     make(map[int]*Job),
+		handles:  make(map[int]*bullets.BulletHandle),
+		spinners: make(map[int]*bullets.Spinner),
 	}
 }
 
@@ -872,6 +701,31 @@ func (jt *jobTracker) setHandle(id int, handle *bullets.BulletHandle) {
 	jt.handles[id] = handle
 }
 
+// getSpinner retrieves a spinner by job ID with read lock.
+func (jt *jobTracker) getSpinner(id int) (*bullets.Spinner, bool) {
+	jt.mu.RLock()
+	defer jt.mu.RUnlock()
+	spinner, exists := jt.spinners[id]
+	return spinner, exists
+}
+
+// setSpinner stores a spinner for a job ID with write lock.
+func (jt *jobTracker) setSpinner(id int, spinner *bullets.Spinner) {
+	jt.mu.Lock()
+	defer jt.mu.Unlock()
+	jt.spinners[id] = spinner
+}
+
+// deleteSpinner stops and removes a spinner with write lock.
+func (jt *jobTracker) deleteSpinner(id int) {
+	jt.mu.Lock()
+	defer jt.mu.Unlock()
+	if spinner, exists := jt.spinners[id]; exists {
+		spinner.Stop()
+		delete(jt.spinners, id)
+	}
+}
+
 // deleteJob removes a job and its handle with write lock.
 func (jt *jobTracker) deleteJob(id int) {
 	jt.mu.Lock()
@@ -901,18 +755,22 @@ func (jt *jobTracker) update(newJobs []*Job, logger *bullets.UpdatableLogger) []
 		oldJob, exists := jt.getJob(newJob.ID)
 
 		if !exists {
-			// New job detected - create handle with formatted status
-			statusText := formatJobStatus(newJob)
-			handle := logger.InfoHandle(statusText)
-			jt.setHandle(newJob.ID, handle)
+			// New job detected
 			jt.setJob(newJob.ID, newJob)
-			// Start pulse animation for running jobs
+			statusText := formatJobStatus(newJob)
+
 			if newJob.Status == statusRunning {
-				handle.Pulse(5*time.Second, statusText)
+				// Create animated spinner for running jobs
+				spinner := logger.SpinnerCircle(statusText)
+				jt.setSpinner(newJob.ID, spinner)
+			} else {
+				// Create static handle for non-running jobs
+				handle := logger.InfoHandle(statusText)
+				jt.setHandle(newJob.ID, handle)
 			}
 			transitions = append(transitions, fmt.Sprintf("Job %d started: %s/%s", newJob.ID, newJob.Stage, newJob.Name))
 		} else if oldJob.Status != newJob.Status {
-			// Status changed - update display and handle pulse animation
+			// Status changed - update display and handle state transitions
 			wasPulsing := oldJob.Status == statusRunning
 			isPulsing := newJob.Status == statusRunning
 
@@ -922,8 +780,8 @@ func (jt *jobTracker) update(newJobs []*Job, logger *bullets.UpdatableLogger) []
 		} else {
 			// No status change, just update job data (timestamps/duration may have changed)
 			jt.setJob(newJob.ID, newJob)
-			// Update text for running jobs to show elapsed time (without re-pulsing)
-			if newJob.Status == statusRunning && newJob.StartedAt != nil {
+			// Update text only for non-running jobs (spinners display automatically)
+			if newJob.Status != statusRunning {
 				if handle, exists := jt.getHandle(newJob.ID); exists {
 					statusText := formatJobStatus(newJob)
 					handle.Update(bullets.InfoLevel, statusText)
@@ -945,31 +803,74 @@ func (jt *jobTracker) update(newJobs []*Job, logger *bullets.UpdatableLogger) []
 }
 
 // updateHandleForJob updates the display for a job when status changes.
-// wasPulsing and isPulsing control whether to start or stop the pulse animation.
+// wasPulsing and isPulsing control whether to start or stop the spinner animation.
 func (jt *jobTracker) updateHandleForJob(logger *bullets.UpdatableLogger, job *Job, wasPulsing, isPulsing bool) {
 	statusText := formatJobStatus(job)
 
-	if handle, exists := jt.getHandle(job.ID); exists {
-		switch job.Status {
-		case statusSuccess:
-			handle.Success(statusText)
-		case statusFailed:
-			handle.Error(statusText)
-		case statusCanceled:
-			handle.Warning(statusText)
-		case statusSkipped:
-			handle.Update(bullets.InfoLevel, statusText)
-		case statusRunning:
-			handle.Update(bullets.InfoLevel, statusText)
-			// Only start pulse animation when transitioning TO running status
-			if isPulsing && !wasPulsing {
-				handle.Pulse(5*time.Second, statusText)
+	// Handle completed jobs - finalize spinner or handle
+	if job.Status == statusSuccess || job.Status == statusFailed || job.Status == statusCanceled {
+		// If was running, stop spinner with final message
+		if spinner, exists := jt.getSpinner(job.ID); exists {
+			switch job.Status {
+			case statusSuccess:
+				spinner.Success(statusText)
+			case statusCanceled:
+				spinner.Replace(statusText) // Use Replace for canceled (neutral outcome)
+			default:
+				spinner.Error(statusText)
 			}
-		case statusPending, statusCreated:
-			handle.Update(bullets.InfoLevel, statusText)
-		default:
-			handle.Update(bullets.InfoLevel, statusText)
+			jt.deleteSpinner(job.ID)
+		} else if handle, exists := jt.getHandle(job.ID); exists {
+			// Was not running, update handle
+			switch job.Status {
+			case statusSuccess:
+				handle.Success(statusText)
+			case statusCanceled:
+				handle.Warning(statusText)
+			default:
+				handle.Error(statusText)
+			}
 		}
+		return
+	}
+
+	// Transition from non-running to running: create spinner
+	if isPulsing && !wasPulsing {
+		// Stop any existing handle
+		if handle, exists := jt.getHandle(job.ID); exists {
+			handle.Update(bullets.InfoLevel, "") // Clear the line
+			jt.mu.Lock()
+			delete(jt.handles, job.ID)
+			jt.mu.Unlock()
+		}
+		// Create animated spinner
+		spinner := logger.SpinnerCircle(statusText)
+		jt.setSpinner(job.ID, spinner)
+		return
+	}
+
+	// Transition from running to non-running: create handle
+	if !isPulsing && wasPulsing {
+		// Stop spinner
+		if spinner, exists := jt.getSpinner(job.ID); exists {
+			spinner.Replace(statusText)
+			jt.deleteSpinner(job.ID)
+		}
+		// Create static handle
+		handle := logger.InfoHandle(statusText)
+		jt.setHandle(job.ID, handle)
+		return
+	}
+
+	// No animation state change - update existing display
+	if _, exists := jt.getSpinner(job.ID); exists {
+		// Spinner is running, no update needed (animation continues)
+		// Spinner doesn't support text updates during animation
+		return
+	}
+	if handle, exists := jt.getHandle(job.ID); exists {
+		// Static handle, update text
+		handle.Update(bullets.InfoLevel, statusText)
 	}
 }
 
@@ -983,6 +884,11 @@ func (jt *jobTracker) cleanup(retentionPeriod time.Duration) {
 		if jt.shouldCleanupJob(job, now, retentionPeriod) {
 			delete(jt.jobs, id)
 			delete(jt.handles, id)
+			// Stop and cleanup any spinners
+			if spinner, exists := jt.spinners[id]; exists {
+				spinner.Stop()
+				delete(jt.spinners, id)
+			}
 		}
 	}
 }
@@ -1007,8 +913,13 @@ func (jt *jobTracker) shouldCleanupJob(job *Job, now time.Time, retention time.D
 func (jt *jobTracker) reset() {
 	jt.mu.Lock()
 	defer jt.mu.Unlock()
+	// Stop all spinners before clearing
+	for _, spinner := range jt.spinners {
+		spinner.Stop()
+	}
 	jt.jobs = make(map[int]*Job)
 	jt.handles = make(map[int]*bullets.BulletHandle)
+	jt.spinners = make(map[int]*bullets.Spinner)
 }
 
 // getActiveJobs returns jobs that are currently running or pending.

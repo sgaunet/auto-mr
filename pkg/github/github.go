@@ -17,10 +17,10 @@ import (
 )
 
 var (
-	errTokenRequired      = errors.New("GITHUB_TOKEN environment variable is required")
-	errInvalidURLFormat   = errors.New("invalid GitHub URL format")
-	errWorkflowTimeout    = errors.New("timeout waiting for workflow completion")
-	errPRNotFound         = errors.New("no pull request found for branch")
+	errTokenRequired    = errors.New("GITHUB_TOKEN environment variable is required")
+	errInvalidURLFormat = errors.New("invalid GitHub URL format")
+	errWorkflowTimeout  = errors.New("timeout waiting for workflow completion")
+	errPRNotFound       = errors.New("no pull request found for branch")
 )
 
 const (
@@ -31,27 +31,19 @@ const (
 	conclusionSuccess      = "success"
 	statusInProgress       = "in_progress"
 	statusQueued           = "queued"
-	statusCompleted        = "completed"
-	conclusionSkipped      = "skipped"
-	conclusionNeutral      = "neutral"
-
-	// Status icons for visual representation
-	iconRunning  = "⟳"
-	iconPending  = "○"
-	iconSuccess  = "✓"
-	iconFailed   = "✗"
-	iconCanceled = "⊘"
-	iconSkipped  = "○"
+	statusCompleted   = "completed"
+	conclusionSkipped = "skipped"
+	conclusionNeutral = "neutral"
 )
 
 // Client represents a GitHub API client wrapper.
 type Client struct {
-	client      *github.Client
-	owner       string
-	repo        string
-	prNumber    int
-	prSHA       string
-	log         *bullets.Logger
+	client       *github.Client
+	owner        string
+	repo         string
+	prNumber     int
+	prSHA        string
+	log          *bullets.Logger
 	updatableLog *bullets.UpdatableLogger
 }
 
@@ -73,9 +65,10 @@ type JobInfo struct {
 
 // checkTracker tracks workflow jobs/checks and their display handles with thread-safe access.
 type checkTracker struct {
-	mu      sync.RWMutex
-	checks  map[int64]*JobInfo
-	handles map[int64]*bullets.BulletHandle
+	mu       sync.RWMutex
+	checks   map[int64]*JobInfo
+	handles  map[int64]*bullets.BulletHandle
+	spinners map[int64]*bullets.Spinner // Spinners for running jobs
 }
 
 // NewClient creates a new GitHub client.
@@ -93,8 +86,8 @@ func NewClient() (*Client, error) {
 	client := github.NewClient(tc)
 
 	return &Client{
-		client:      client,
-		log:         logger.NoLogger(),
+		client:       client,
+		log:          logger.NoLogger(),
 		updatableLog: bullets.NewUpdatable(os.Stdout),
 	}, nil
 }
@@ -279,14 +272,13 @@ func (c *Client) WaitForWorkflows(timeout time.Duration) (string, error) {
 		}
 
 		if checkRuns.GetTotal() == 0 {
-			elapsed := time.Since(start)
-			c.updatableLog.Info(fmt.Sprintf("Waiting for workflows to start... (%s)", formatDuration(elapsed)))
+			// Wait silently for workflows to appear (they'll show as individual spinners when they start)
 			time.Sleep(checkPollInterval)
 			continue
 		}
 
 		// Try to fetch and display job-level information with check tracker
-		allCompleted, conclusion := c.processWorkflowsWithJobTracking(tracker, start)
+		allCompleted, conclusion := c.processWorkflowsWithJobTracking(tracker)
 
 		if !allCompleted {
 			time.Sleep(checkPollInterval)
@@ -296,11 +288,11 @@ func (c *Client) WaitForWorkflows(timeout time.Duration) (string, error) {
 		// All workflows completed - display final summary
 		totalDuration := time.Since(start)
 		if conclusion == conclusionSuccess {
-			c.updatableLog.Success(fmt.Sprintf("%s Workflows completed successfully - total time: %s",
-				iconSuccess, formatDuration(totalDuration)))
+			c.updatableLog.Success(fmt.Sprintf("Workflows completed successfully - total time: %s",
+				formatDuration(totalDuration)))
 		} else {
-			msg := fmt.Sprintf("%s Workflows failed - total time: %s",
-				iconFailed, formatDuration(totalDuration))
+			msg := fmt.Sprintf("Workflows failed - total time: %s",
+				formatDuration(totalDuration))
 			handle := c.updatableLog.InfoHandle(msg)
 			handle.Error(msg)
 		}
@@ -390,7 +382,7 @@ func (c *Client) hasWorkflowRuns() bool {
 }
 
 // processWorkflowsWithJobTracking processes workflows using checkTracker for individual job display.
-func (c *Client) processWorkflowsWithJobTracking(tracker *checkTracker, startTime time.Time) (bool, string) {
+func (c *Client) processWorkflowsWithJobTracking(tracker *checkTracker) (bool, string) {
 	allCompleted := true
 	conclusion := conclusionSuccess
 
@@ -398,7 +390,7 @@ func (c *Client) processWorkflowsWithJobTracking(tracker *checkTracker, startTim
 	jobs, err := c.fetchWorkflowJobs()
 	if err != nil {
 		c.log.Debug(fmt.Sprintf("Failed to fetch workflow jobs, falling back to check runs: %v", err))
-		// Fall back to check runs
+		// Fall back to check runs (pass tracker for individual spinners)
 		checkRuns, _, err := c.client.Checks.ListCheckRunsForRef(
 			c.ctx(), c.owner, c.repo, c.prSHA,
 			&github.ListCheckRunsOptions{
@@ -406,7 +398,7 @@ func (c *Client) processWorkflowsWithJobTracking(tracker *checkTracker, startTim
 			},
 		)
 		if err == nil && checkRuns.GetTotal() > 0 {
-			return c.processCheckRunsFallback(nil, startTime)
+			return c.processCheckRunsFallback(tracker, checkRuns.CheckRuns)
 		}
 		return false, ""
 	}
@@ -421,7 +413,7 @@ func (c *Client) processWorkflowsWithJobTracking(tracker *checkTracker, startTim
 			},
 		)
 		if err == nil && checkRuns.GetTotal() > 0 {
-			return c.processCheckRunsFallback(nil, startTime)
+			return c.processCheckRunsFallback(tracker, checkRuns.CheckRuns)
 		}
 		return false, ""
 	}
@@ -453,70 +445,48 @@ func (c *Client) processWorkflowsWithJobTracking(tracker *checkTracker, startTim
 	return allCompleted, conclusion
 }
 
-// processWorkflows tries to fetch and display job-level information, with fallback to check runs.
-func (c *Client) processWorkflows(handle *bullets.BulletHandle, startTime time.Time) (bool, string) {
-	elapsed := time.Since(startTime)
+// processCheckRunsFallback processes check runs using checkTracker for individual spinners.
+// This is used as a fallback when workflow jobs API is unavailable.
+func (c *Client) processCheckRunsFallback(tracker *checkTracker, checkRuns []*github.CheckRun) (bool, string) {
+	// Convert CheckRuns to JobInfo format for tracker
+	jobs := make([]*JobInfo, 0, len(checkRuns))
+	for _, check := range checkRuns {
+		if check == nil || check.ID == nil {
+			continue
+		}
 
-	// Try to fetch workflow jobs
-	jobs, err := c.fetchWorkflowJobs()
-	if err != nil {
-		c.log.Debug(fmt.Sprintf("Failed to fetch workflow jobs, falling back to check runs: %v", err))
-		return c.processCheckRunsFallback(handle, startTime)
+		job := &JobInfo{
+			ID:         *check.ID,
+			Name:       check.GetName(),
+			Status:     check.GetStatus(),
+			Conclusion: check.GetConclusion(),
+			HTMLURL:    check.GetHTMLURL(),
+		}
+
+		// Set timestamps if available
+		if check.StartedAt != nil {
+			startedAt := check.StartedAt.GetTime()
+			job.StartedAt = startedAt
+		}
+		if check.CompletedAt != nil {
+			completedAt := check.CompletedAt.GetTime()
+			job.CompletedAt = completedAt
+		}
+
+		jobs = append(jobs, job)
 	}
 
-	// If no jobs found, fall back to check runs
-	if len(jobs) == 0 {
-		c.log.Debug("No workflow jobs found, falling back to check runs")
-		return c.processCheckRunsFallback(handle, startTime)
-	}
+	// Update check tracker with converted jobs (creates/updates spinners automatically)
+	tracker.update(jobs, c.updatableLog)
 
-	// Display job-level information
+	// Analyze completion status
 	allCompleted := true
 	conclusion := conclusionSuccess
 
-	jobsByStatus := c.analyzeJobStatuses(jobs, &allCompleted, &conclusion)
-	statusMsg := c.buildJobStatusMessage(jobsByStatus, jobs, elapsed)
-	handle.Update(bullets.InfoLevel, statusMsg)
-
-	return allCompleted, conclusion
-}
-
-// processCheckRunsFallback fetches check runs and processes them as fallback.
-func (c *Client) processCheckRunsFallback(handle *bullets.BulletHandle, startTime time.Time) (bool, string) {
-	// Create handle if not provided (defensive programming for fallback scenarios)
-	if handle == nil {
-		handle = c.updatableLog.InfoHandle("Checking workflow status...")
-	}
-
-	checkRuns, _, err := c.client.Checks.ListCheckRunsForRef(
-		c.ctx(), c.owner, c.repo, c.prSHA,
-		&github.ListCheckRunsOptions{
-			ListOptions: github.ListOptions{PerPage: maxCheckRunsPerPage},
-		},
-	)
-	if err != nil {
-		c.log.Debug(fmt.Sprintf("Failed to list check runs: %v", err))
-		return false, ""
-	}
-
-	return c.processCheckRuns(checkRuns.CheckRuns, handle, startTime)
-}
-
-// analyzeJobStatuses analyzes all jobs and returns status counts while updating completion state.
-func (c *Client) analyzeJobStatuses(
-	jobs []*JobInfo,
-	allCompleted *bool,
-	conclusion *string,
-) map[string]int {
-	jobsByStatus := make(map[string]int)
-
 	for _, job := range jobs {
-		jobsByStatus[job.Status]++
-
-		// Update completion status
 		switch job.Status {
 		case statusInProgress, statusQueued:
-			*allCompleted = false
+			allCompleted = false
 		case statusCompleted:
 			// Check conclusion for completed jobs
 			switch job.Conclusion {
@@ -526,95 +496,14 @@ func (c *Client) analyzeJobStatuses(
 				// Neutral/skipped - no change needed
 			default:
 				// Failed, cancelled, or other non-success conclusion
-				if *conclusion == conclusionSuccess {
-					*conclusion = job.Conclusion
+				if conclusion == conclusionSuccess {
+					conclusion = job.Conclusion
 				}
 			}
 		}
 	}
 
-	return jobsByStatus
-}
-
-// buildJobStatusMessage creates a status message from job statistics.
-func (c *Client) buildJobStatusMessage(
-	jobsByStatus map[string]int,
-	allJobs []*JobInfo,
-	elapsed time.Duration,
-) string {
-	var statusParts []string
-
-	if count := jobsByStatus[statusInProgress]; count > 0 {
-		statusParts = append(statusParts, fmt.Sprintf("%d running", count))
-	}
-	if count := jobsByStatus[statusQueued]; count > 0 {
-		statusParts = append(statusParts, fmt.Sprintf("%d queued", count))
-	}
-
-	// Count completed jobs by conclusion
-	succeeded, failed, skipped := c.countCompletedJobs(allJobs)
-
-	if succeeded > 0 {
-		statusParts = append(statusParts, fmt.Sprintf("%d passed", succeeded))
-	}
-	if failed > 0 {
-		statusParts = append(statusParts, fmt.Sprintf("%d failed", failed))
-	}
-	if skipped > 0 {
-		statusParts = append(statusParts, fmt.Sprintf("%d skipped", skipped))
-	}
-
-	statusMsg := fmt.Sprintf("Jobs: %s (total: %d) - %s",
-		strings.Join(statusParts, ", "), len(allJobs), formatDuration(elapsed))
-
-	// Add details for running/failed jobs
-	jobDetails := c.collectJobDetails(allJobs)
-	if len(jobDetails) > 0 {
-		statusMsg += fmt.Sprintf(" [%s]", strings.Join(jobDetails, ", "))
-	}
-
-	return statusMsg
-}
-
-// countCompletedJobs counts completed jobs by their conclusion.
-func (c *Client) countCompletedJobs(allJobs []*JobInfo) (int, int, int) {
-	var succeeded, failed, skipped int
-	for _, job := range allJobs {
-		if job.Status == statusCompleted {
-			switch job.Conclusion {
-			case conclusionSuccess:
-				succeeded++
-			case conclusionSkipped, conclusionNeutral:
-				skipped++
-			default:
-				failed++
-			}
-		}
-	}
-	return succeeded, failed, skipped
-}
-
-// collectJobDetails collects details for running or failed jobs (limited for readability).
-func (c *Client) collectJobDetails(allJobs []*JobInfo) []string {
-	var jobDetails []string
-	for _, job := range allJobs {
-		isRunning := job.Status == statusInProgress
-		isFailed := job.Status == statusCompleted && job.Conclusion != conclusionSuccess &&
-			job.Conclusion != conclusionSkipped && job.Conclusion != conclusionNeutral
-
-		if isRunning || isFailed {
-			detail := job.Name
-			if isRunning && job.StartedAt != nil {
-				duration := time.Since(*job.StartedAt)
-				detail += fmt.Sprintf("(%s)", formatDuration(duration))
-			}
-			jobDetails = append(jobDetails, detail)
-			if len(jobDetails) >= maxJobDetailsToDisplay {
-				break
-			}
-		}
-	}
-	return jobDetails
+	return allCompleted, conclusion
 }
 
 // fetchWorkflowJobs fetches all jobs for workflow runs associated with the PR SHA.
@@ -722,41 +611,23 @@ func formatDuration(d time.Duration) string {
 	return fmt.Sprintf("%ds", seconds)
 }
 
-// formatJobStatus formats a job/check status with icon and duration.
-// Returns a formatted string like "⟳ build (running, 1m 23s)" or "✓ test (success, 45s)".
+// formatJobStatus formats a job/check status with duration.
+// Returns a formatted string like "build (running, 1m 23s)" or "test (success, 45s)".
+// Icons are added by the bullets library methods (Success/Error/etc), not by this function.
 func formatJobStatus(job *JobInfo) string {
 	if job == nil {
 		return ""
 	}
 
-	// Select icon based on status and conclusion
-	icon := iconPending
+	// Determine status text
 	statusText := job.Status
-
 	if job.Status == statusCompleted {
 		// Use conclusion for completed jobs
 		statusText = job.Conclusion
-		switch job.Conclusion {
-		case conclusionSuccess:
-			icon = iconSuccess
-		case conclusionSkipped, conclusionNeutral:
-			icon = iconSkipped
-		case "cancelled":
-			icon = iconCanceled
-		default:
-			// Failed, timed_out, action_required, etc.
-			icon = iconFailed
-		}
-	} else {
-		// Use status for in-progress or queued jobs
-		switch job.Status {
-		case statusInProgress:
-			icon = iconRunning
-			statusText = "running"
-		case statusQueued:
-			icon = iconPending
-			statusText = "queued"
-		}
+	} else if job.Status == statusInProgress {
+		statusText = "running"
+	} else if job.Status == statusQueued {
+		statusText = "queued"
 	}
 
 	// Calculate duration
@@ -771,11 +642,11 @@ func formatJobStatus(job *JobInfo) string {
 		durationStr = formatDuration(elapsed)
 	}
 
-	// Format the complete status string
+	// Format the complete status string (without icon - bullets library adds those)
 	if durationStr != "" {
-		return fmt.Sprintf("%s %s (%s, %s)", icon, job.Name, statusText, durationStr)
+		return fmt.Sprintf("%s (%s, %s)", job.Name, statusText, durationStr)
 	}
-	return fmt.Sprintf("%s %s (%s)", icon, job.Name, statusText)
+	return fmt.Sprintf("%s (%s)", job.Name, statusText)
 }
 
 // addReviewers adds reviewers to a pull request, filtering out the PR author.
@@ -800,112 +671,12 @@ func (c *Client) addReviewers(pr *github.PullRequest, reviewers []string) error 
 	return nil
 }
 
-// checkStats holds counters for check run statuses.
-type checkStats struct {
-	running        int
-	queued         int
-	succeeded      int
-	failed         int
-	skipped        int
-	runningChecks  []string
-}
-
-// processCheckRuns evaluates check run statuses and returns completion state and overall conclusion.
-func (c *Client) processCheckRuns(
-	checks []*github.CheckRun, handle *bullets.BulletHandle, startTime time.Time,
-) (bool, string) {
-	allCompleted := true
-	conclusion := conclusionSuccess
-	elapsed := time.Since(startTime)
-
-	stats := c.collectCheckStats(checks, &allCompleted, &conclusion)
-	statusMsg := c.buildCheckStatusMessage(stats, len(checks), elapsed)
-
-	handle.Update(bullets.InfoLevel, statusMsg)
-	return allCompleted, conclusion
-}
-
-// collectCheckStats collects statistics from all check runs.
-func (c *Client) collectCheckStats(
-	checks []*github.CheckRun, allCompleted *bool, conclusion *string,
-) checkStats {
-	stats := checkStats{}
-
-	for _, check := range checks {
-		status := check.GetStatus()
-
-		switch status {
-		case statusInProgress:
-			*allCompleted = false
-			stats.running++
-			stats.runningChecks = append(stats.runningChecks, check.GetName())
-		case statusQueued:
-			*allCompleted = false
-			stats.queued++
-		case statusCompleted:
-			c.processCompletedCheck(check, &stats, conclusion)
-		}
-	}
-
-	return stats
-}
-
-// processCompletedCheck processes a completed check and updates stats.
-func (c *Client) processCompletedCheck(
-	check *github.CheckRun, stats *checkStats, conclusion *string,
-) {
-	checkConclusion := check.GetConclusion()
-
-	switch checkConclusion {
-	case conclusionSuccess:
-		stats.succeeded++
-	case conclusionSkipped, conclusionNeutral:
-		stats.skipped++
-	default:
-		stats.failed++
-		// Update overall conclusion if this check failed
-		if *conclusion == conclusionSuccess {
-			*conclusion = checkConclusion
-		}
-	}
-}
-
-// buildCheckStatusMessage builds a status message from check statistics.
-func (c *Client) buildCheckStatusMessage(stats checkStats, total int, elapsed time.Duration) string {
-	var statusParts []string
-
-	if stats.running > 0 {
-		statusParts = append(statusParts, fmt.Sprintf("%d running", stats.running))
-	}
-	if stats.queued > 0 {
-		statusParts = append(statusParts, fmt.Sprintf("%d queued", stats.queued))
-	}
-	if stats.succeeded > 0 {
-		statusParts = append(statusParts, fmt.Sprintf("%d passed", stats.succeeded))
-	}
-	if stats.failed > 0 {
-		statusParts = append(statusParts, fmt.Sprintf("%d failed", stats.failed))
-	}
-	if stats.skipped > 0 {
-		statusParts = append(statusParts, fmt.Sprintf("%d skipped", stats.skipped))
-	}
-
-	statusMsg := fmt.Sprintf("Checks: %s (total: %d) - %s",
-		strings.Join(statusParts, ", "), total, formatDuration(elapsed))
-
-	// Add currently running check names for context
-	if len(stats.runningChecks) > 0 && len(stats.runningChecks) <= 3 {
-		statusMsg += fmt.Sprintf(" [%s]", strings.Join(stats.runningChecks, ", "))
-	}
-
-	return statusMsg
-}
-
 // newCheckTracker creates a new check tracker with initialized maps.
 func newCheckTracker() *checkTracker {
 	return &checkTracker{
-		checks:  make(map[int64]*JobInfo),
-		handles: make(map[int64]*bullets.BulletHandle),
+		checks:   make(map[int64]*JobInfo),
+		handles:  make(map[int64]*bullets.BulletHandle),
+		spinners: make(map[int64]*bullets.Spinner),
 	}
 }
 
@@ -939,12 +710,41 @@ func (ct *checkTracker) setHandle(id int64, handle *bullets.BulletHandle) {
 	ct.handles[id] = handle
 }
 
-// deleteCheck removes a job/check and its handle with write lock.
+// getSpinner retrieves a spinner by ID with read lock.
+func (ct *checkTracker) getSpinner(id int64) (*bullets.Spinner, bool) {
+	ct.mu.RLock()
+	defer ct.mu.RUnlock()
+	spinner, exists := ct.spinners[id]
+	return spinner, exists
+}
+
+// setSpinner stores a spinner for a job/check ID with write lock.
+func (ct *checkTracker) setSpinner(id int64, spinner *bullets.Spinner) {
+	ct.mu.Lock()
+	defer ct.mu.Unlock()
+	ct.spinners[id] = spinner
+}
+
+// deleteSpinner removes a spinner with write lock.
+func (ct *checkTracker) deleteSpinner(id int64) {
+	ct.mu.Lock()
+	defer ct.mu.Unlock()
+	if spinner, exists := ct.spinners[id]; exists {
+		spinner.Stop() // Stop animation before deleting
+		delete(ct.spinners, id)
+	}
+}
+
+// deleteCheck removes a job/check and its handle/spinner with write lock.
 func (ct *checkTracker) deleteCheck(id int64) {
 	ct.mu.Lock()
 	defer ct.mu.Unlock()
 	delete(ct.checks, id)
 	delete(ct.handles, id)
+	if spinner, exists := ct.spinners[id]; exists {
+		spinner.Stop() // Stop animation before deleting
+		delete(ct.spinners, id)
+	}
 }
 
 // update processes new jobs/checks, detects state transitions, and updates handles.
@@ -968,15 +768,20 @@ func (ct *checkTracker) update(newChecks []*JobInfo, logger *bullets.UpdatableLo
 		oldCheck, exists := ct.getCheck(newCheck.ID)
 
 		if !exists {
-			// New job detected - create handle with formatted status
-			statusText := formatJobStatus(newCheck)
-			handle := logger.InfoHandle(statusText)
-			ct.setHandle(newCheck.ID, handle)
+			// New job detected
 			ct.setCheck(newCheck.ID, newCheck)
-			// Start pulse animation for running jobs
+			statusText := formatJobStatus(newCheck)
+
 			if newCheck.Status == statusInProgress {
-				handle.Pulse(5*time.Second, statusText)
+				// Running job: create animated spinner
+				spinner := logger.SpinnerCircle(statusText)
+				ct.setSpinner(newCheck.ID, spinner)
+			} else {
+				// Non-running job: create static handle
+				handle := logger.InfoHandle(statusText)
+				ct.setHandle(newCheck.ID, handle)
 			}
+
 			transitions = append(transitions, fmt.Sprintf("Job %d started: %s", newCheck.ID, newCheck.Name))
 		} else if ct.hasStatusChanged(oldCheck, newCheck) {
 			// Status or conclusion changed - update display and handle pulse animation
@@ -989,13 +794,8 @@ func (ct *checkTracker) update(newChecks []*JobInfo, logger *bullets.UpdatableLo
 		} else {
 			// No status change, just update check data (timestamps may have changed)
 			ct.setCheck(newCheck.ID, newCheck)
-			// Update text for running jobs to show elapsed time (without re-pulsing)
-			if newCheck.Status == statusInProgress {
-				if handle, exists := ct.getHandle(newCheck.ID); exists {
-					statusText := formatJobStatus(newCheck)
-					handle.Update(bullets.InfoLevel, statusText)
-				}
-			}
+			// Update text for running jobs to show elapsed time (spinner updates automatically)
+			// No action needed - SpinnerCircle displays the status text continuously
 		}
 	}
 
@@ -1031,34 +831,76 @@ func (ct *checkTracker) formatTransition(oldCheck, newCheck *JobInfo) string {
 	return fmt.Sprintf("Job %d: %s -> %s", newCheck.ID, oldState, newState)
 }
 
-// updateHandleForCheck updates the bullet handle based on job status and conclusion using formatJobStatus.
-// wasPulsing and isPulsing control whether to start or stop the pulse animation.
+// updateHandleForCheck updates display based on job status transitions.
+// Manages transitions between static handles (queued) and animated spinners (running).
 func (ct *checkTracker) updateHandleForCheck(logger *bullets.UpdatableLogger, check *JobInfo, wasPulsing, isPulsing bool) {
 	statusText := formatJobStatus(check)
 
-	// Handle completed jobs by conclusion
+	// Handle completed jobs - finalize spinner or handle
 	if check.Status == statusCompleted {
-		if handle, exists := ct.getHandle(check.ID); exists {
+		// If was running, stop spinner with final message
+		if spinner, exists := ct.getSpinner(check.ID); exists {
+			switch check.Conclusion {
+			case conclusionSuccess:
+				spinner.Success(statusText)
+			case conclusionSkipped, conclusionNeutral:
+				spinner.Replace(statusText)
+			default:
+				// Failed, cancelled, or other non-success conclusion
+				spinner.Error(statusText)
+			}
+			ct.deleteSpinner(check.ID)
+		} else if handle, exists := ct.getHandle(check.ID); exists {
+			// Was not running, update handle
 			switch check.Conclusion {
 			case conclusionSuccess:
 				handle.Success(statusText)
 			case conclusionSkipped, conclusionNeutral:
 				handle.Update(bullets.InfoLevel, statusText)
 			default:
-				// Failed, cancelled, or other non-success conclusion
 				handle.Error(statusText)
 			}
 		}
 		return
 	}
 
-	// Handle in-progress or queued jobs
-	if handle, exists := ct.getHandle(check.ID); exists {
-		handle.Update(bullets.InfoLevel, statusText)
-		// Only start pulse animation when transitioning TO running status
-		if isPulsing && !wasPulsing {
-			handle.Pulse(5*time.Second, statusText)
+	// Transition from non-running to running: create spinner
+	if isPulsing && !wasPulsing {
+		// Stop any existing handle
+		if handle, exists := ct.getHandle(check.ID); exists {
+			handle.Update(bullets.InfoLevel, "") // Clear the line
+			ct.mu.Lock()
+			delete(ct.handles, check.ID)
+			ct.mu.Unlock()
 		}
+		// Create animated spinner
+		spinner := logger.SpinnerCircle(statusText)
+		ct.setSpinner(check.ID, spinner)
+		return
+	}
+
+	// Transition from running to non-running: create handle
+	if !isPulsing && wasPulsing {
+		// Stop spinner
+		if spinner, exists := ct.getSpinner(check.ID); exists {
+			spinner.Replace(statusText)
+			ct.deleteSpinner(check.ID)
+		}
+		// Create static handle
+		handle := logger.InfoHandle(statusText)
+		ct.setHandle(check.ID, handle)
+		return
+	}
+
+	// No animation state change - update existing display
+	if _, exists := ct.getSpinner(check.ID); exists {
+		// Spinner is running, no update needed (animation continues)
+		// Spinner doesn't support text updates during animation
+		return
+	}
+	if handle, exists := ct.getHandle(check.ID); exists {
+		// Static handle, update text
+		handle.Update(bullets.InfoLevel, statusText)
 	}
 }
 
@@ -1072,6 +914,10 @@ func (ct *checkTracker) cleanup(retentionPeriod time.Duration) {
 		if ct.shouldCleanupCheck(check, now, retentionPeriod) {
 			delete(ct.checks, id)
 			delete(ct.handles, id)
+			if spinner, exists := ct.spinners[id]; exists {
+				spinner.Stop()
+				delete(ct.spinners, id)
+			}
 		}
 	}
 }
@@ -1095,8 +941,13 @@ func (ct *checkTracker) shouldCleanupCheck(check *JobInfo, now time.Time, retent
 func (ct *checkTracker) reset() {
 	ct.mu.Lock()
 	defer ct.mu.Unlock()
+	// Stop all spinners before clearing
+	for _, spinner := range ct.spinners {
+		spinner.Stop()
+	}
 	ct.checks = make(map[int64]*JobInfo)
 	ct.handles = make(map[int64]*bullets.BulletHandle)
+	ct.spinners = make(map[int64]*bullets.Spinner)
 }
 
 // getActiveChecks returns jobs that are currently running or queued.

@@ -27,7 +27,7 @@ func TestFormatJobStatus(t *testing.T) {
 				Status:   statusRunning,
 				Duration: 83.5,
 			},
-			expected: []string{iconRunning, "test/build", "running", "1m 23s"},
+			expected: []string{"test/build", "running", "1m 23s"},
 		},
 		{
 			name: "success job",
@@ -38,7 +38,7 @@ func TestFormatJobStatus(t *testing.T) {
 				Status:   statusSuccess,
 				Duration: 45.0,
 			},
-			expected: []string{iconSuccess, "test/test", "success", "45s"},
+			expected: []string{"test/test", "success", "45s"},
 		},
 		{
 			name: "failed job",
@@ -49,7 +49,7 @@ func TestFormatJobStatus(t *testing.T) {
 				Status:   statusFailed,
 				Duration: 10.0,
 			},
-			expected: []string{iconFailed, "deploy/deploy", "failed", "10s"},
+			expected: []string{"deploy/deploy", "failed", "10s"},
 		},
 		{
 			name: "canceled job",
@@ -59,7 +59,7 @@ func TestFormatJobStatus(t *testing.T) {
 				Stage:  "cleanup",
 				Status: statusCanceled,
 			},
-			expected: []string{iconCanceled, "cleanup/cleanup", "canceled"},
+			expected: []string{"cleanup/cleanup", "canceled"},
 		},
 		{
 			name: "skipped job",
@@ -68,7 +68,7 @@ func TestFormatJobStatus(t *testing.T) {
 				Name:   "optional",
 				Status: statusSkipped,
 			},
-			expected: []string{iconSkipped, "optional", "skipped"},
+			expected: []string{"optional", "skipped"},
 		},
 		{
 			name: "pending job without stage",
@@ -77,7 +77,7 @@ func TestFormatJobStatus(t *testing.T) {
 				Name:   "waiting",
 				Status: statusPending,
 			},
-			expected: []string{iconPending, "waiting", "pending"},
+			expected: []string{"waiting", "pending"},
 		},
 		{
 			name: "created job",
@@ -86,7 +86,7 @@ func TestFormatJobStatus(t *testing.T) {
 				Name:   "init",
 				Status: statusCreated,
 			},
-			expected: []string{iconPending, "init", "created"},
+			expected: []string{"init", "created"},
 		},
 		{
 			name: "running job with elapsed time",
@@ -99,7 +99,7 @@ func TestFormatJobStatus(t *testing.T) {
 					StartedAt: &startTime,
 				}
 			}(),
-			expected: []string{iconRunning, "long-runner", "running", "2m"},
+			expected: []string{"long-runner", "running", "2m"},
 		},
 	}
 
@@ -120,36 +120,6 @@ func TestFormatJobStatus(t *testing.T) {
 				if !strings.Contains(result, exp) {
 					t.Errorf("Expected %q to contain %q, got %q", result, exp, result)
 				}
-			}
-		})
-	}
-}
-
-// TestFormatJobStatusIconMapping tests that correct icons are used for each status.
-func TestFormatJobStatusIconMapping(t *testing.T) {
-	tests := []struct {
-		status       string
-		expectedIcon string
-	}{
-		{statusRunning, iconRunning},
-		{statusSuccess, iconSuccess},
-		{statusFailed, iconFailed},
-		{statusCanceled, iconCanceled},
-		{statusSkipped, iconSkipped},
-		{statusPending, iconPending},
-		{statusCreated, iconPending},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.status, func(t *testing.T) {
-			job := &Job{
-				ID:     1,
-				Name:   "test",
-				Status: tt.status,
-			}
-			result := formatJobStatus(job)
-			if !strings.HasPrefix(result, tt.expectedIcon) {
-				t.Errorf("Expected icon %q for status %q, result: %q", tt.expectedIcon, tt.status, result)
 			}
 		})
 	}
@@ -190,13 +160,12 @@ func TestFormatJobStatusEdgeCases(t *testing.T) {
 			Status: "unknown",
 		}
 		result := formatJobStatus(job)
-		// Should still return something
+		// Should still return something with the status
 		if result == "" {
 			t.Error("Should handle unknown status gracefully")
 		}
-		// Should default to pending icon
-		if !strings.HasPrefix(result, iconPending) {
-			t.Errorf("Unknown status should default to pending icon, got: %q", result)
+		if !strings.Contains(result, "unknown") {
+			t.Errorf("Expected result to contain status 'unknown', got: %q", result)
 		}
 	})
 }
