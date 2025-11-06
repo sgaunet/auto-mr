@@ -3,10 +3,8 @@ package github
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/google/go-github/v69/github"
@@ -15,40 +13,6 @@ import (
 	"golang.org/x/oauth2"
 )
 
-var (
-	errTokenRequired      = errors.New("GITHUB_TOKEN environment variable is required")
-	errInvalidURLFormat   = errors.New("invalid GitHub URL format")
-	errWorkflowTimeout    = errors.New("timeout waiting for workflow completion")
-	errPRNotFound         = errors.New("no pull request found for branch")
-)
-
-const (
-	minURLParts          = 2
-	maxCheckRunsPerPage  = 100
-	checkPollInterval    = 5 * time.Second
-	conclusionSuccess    = "success"
-	statusInProgress     = "in_progress"
-	statusQueued         = "queued"
-	statusCompleted      = "completed"
-	conclusionSkipped    = "skipped"
-	conclusionNeutral    = "neutral"
-)
-
-// Client represents a GitHub API client wrapper.
-type Client struct {
-	client      *github.Client
-	owner       string
-	repo        string
-	prNumber    int
-	prSHA       string
-	log         *bullets.Logger
-	updatableLog *bullets.UpdatableLogger
-}
-
-// Label represents a GitHub label.
-type Label struct {
-	Name string
-}
 
 // NewClient creates a new GitHub client.
 func NewClient() (*Client, error) {
@@ -64,159 +28,22 @@ func NewClient() (*Client, error) {
 	tc := oauth2.NewClient(ctx, ts)
 	client := github.NewClient(tc)
 
+	log := logger.NoLogger()
+	updatable := bullets.NewUpdatable(os.Stdout)
+	display := newDisplayRenderer(log, updatable)
+
 	return &Client{
-		client:      client,
-		log:         logger.NoLogger(),
-		updatableLog: bullets.NewUpdatable(os.Stdout),
+		client:  client,
+		log:     log,
+		display: display,
 	}, nil
 }
 
 // SetLogger sets the logger for the GitHub client.
 func (c *Client) SetLogger(logger *bullets.Logger) {
 	c.log = logger
-	c.updatableLog.Logger = logger
+	c.display.SetLogger(logger)
 	c.log.Debug("GitHub client logger configured")
-}
-
-// SetRepositoryFromURL sets the repository from a git remote URL.
-func (c *Client) SetRepositoryFromURL(url string) error {
-	// Extract owner/repo from URL
-	// Supports both HTTPS and SSH formats:
-	// - https://github.com/owner/repo.git
-	// - git@github.com:owner/repo.git
-	url = strings.TrimSuffix(url, ".git")
-
-	ownerRepo := extractOwnerRepo(url)
-	if ownerRepo == "" {
-		return errInvalidURLFormat
-	}
-
-	parts := strings.Split(ownerRepo, "/")
-	if len(parts) != minURLParts {
-		return errInvalidURLFormat
-	}
-
-	c.owner = parts[0]
-	c.repo = parts[1]
-
-	c.log.Debug(fmt.Sprintf("Setting GitHub repository: %s/%s", c.owner, c.repo))
-	// Validate repository exists
-	_, _, err := c.client.Repositories.Get(c.ctx(), c.owner, c.repo)
-	if err != nil {
-		return fmt.Errorf("failed to get repository information: %w", err)
-	}
-
-	c.log.Debug("GitHub repository set successfully")
-	return nil
-}
-
-// extractOwnerRepo extracts the owner/repo path from a git URL.
-func extractOwnerRepo(url string) string {
-	if strings.HasPrefix(url, "git@") || strings.HasPrefix(url, "ssh://git@") {
-		// SSH format: git@github.com:owner/repo or ssh://git@github.com/owner/repo
-		parts := strings.Split(url, ":")
-		if len(parts) >= minURLParts {
-			return parts[len(parts)-1]
-		}
-		// Handle ssh:// format
-		parts = strings.Split(url, "/")
-		if len(parts) >= minURLParts {
-			return strings.Join(parts[len(parts)-2:], "/")
-		}
-	} else {
-		// HTTPS format
-		parts := strings.Split(url, "/")
-		if len(parts) >= minURLParts {
-			return strings.Join(parts[len(parts)-2:], "/")
-		}
-	}
-	return ""
-}
-
-// ListLabels returns all labels for the repository.
-func (c *Client) ListLabels() ([]*Label, error) {
-	c.log.Debug("Listing GitHub labels")
-	labels, _, err := c.client.Issues.ListLabels(c.ctx(), c.owner, c.repo, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list labels: %w", err)
-	}
-
-	result := make([]*Label, len(labels))
-	for i, label := range labels {
-		result[i] = &Label{Name: *label.Name}
-	}
-
-	c.log.Debug(fmt.Sprintf("Labels retrieved, count: %d", len(labels)))
-	return result, nil
-}
-
-// CreatePullRequest creates a new pull request with assignees, reviewers, and labels.
-func (c *Client) CreatePullRequest(
-	head, base, title, body string,
-	assignees, reviewers, labels []string,
-) (*github.PullRequest, error) {
-	c.log.Debug(fmt.Sprintf("Creating pull request from %s to %s", head, base))
-
-	newPR := &github.NewPullRequest{
-		Title: github.Ptr(title),
-		Head:  github.Ptr(head),
-		Base:  github.Ptr(base),
-		Body:  github.Ptr(body),
-	}
-
-	pr, _, err := c.client.PullRequests.Create(c.ctx(), c.owner, c.repo, newPR)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create pull request: %w", err)
-	}
-
-	// Add assignees if provided
-	if len(assignees) > 0 {
-		_, _, err = c.client.Issues.AddAssignees(c.ctx(), c.owner, c.repo, *pr.Number, assignees)
-		if err != nil {
-			return nil, fmt.Errorf("failed to add assignees: %w", err)
-		}
-	}
-
-	// Add reviewers if provided (filter out PR author)
-	if len(reviewers) > 0 {
-		if err := c.addReviewers(pr, reviewers); err != nil {
-			return nil, err
-		}
-	}
-
-	// Add labels if provided
-	if len(labels) > 0 {
-		_, _, err = c.client.Issues.AddLabelsToIssue(c.ctx(), c.owner, c.repo, *pr.Number, labels)
-		if err != nil {
-			return nil, fmt.Errorf("failed to add labels: %w", err)
-		}
-	}
-
-	c.prNumber = *pr.Number
-	c.prSHA = *pr.Head.SHA
-	c.log.Debug(fmt.Sprintf("Pull request created - number: %d, URL: %s", c.prNumber, *pr.HTMLURL))
-	return pr, nil
-}
-
-// GetPullRequestByBranch fetches an existing pull request by head and base branches.
-func (c *Client) GetPullRequestByBranch(head, base string) (*github.PullRequest, error) {
-	prs, _, err := c.client.PullRequests.List(c.ctx(), c.owner, c.repo, &github.PullRequestListOptions{
-		State: "open",
-		Head:  fmt.Sprintf("%s:%s", c.owner, head),
-		Base:  base,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to list pull requests: %w", err)
-	}
-
-	if len(prs) == 0 {
-		return nil, fmt.Errorf("%w: %s", errPRNotFound, head)
-	}
-
-	pr := prs[0]
-	c.prNumber = *pr.Number
-	c.prSHA = *pr.Head.SHA
-	return pr, nil
 }
 
 // WaitForWorkflows waits for all workflow runs to complete for the pull request.
@@ -231,11 +58,12 @@ func (c *Client) WaitForWorkflows(timeout time.Duration) (string, error) {
 	}
 
 	// Create updatable handle for workflow status
-	c.updatableLog.Info("Waiting for workflows to complete...")
-	c.updatableLog.IncreasePadding()
-	defer c.updatableLog.DecreasePadding()
+	c.display.Info("Waiting for workflows to complete...")
+	c.display.IncreasePadding()
+	defer c.display.DecreasePadding()
 
-	handle := c.updatableLog.InfoHandle("Checking status...")
+	// Initialize check tracker for managing individual job handles
+	tracker := newCheckTracker()
 
 	for time.Since(start) < timeout {
 		checkRuns, _, err := c.client.Checks.ListCheckRunsForRef(
@@ -245,119 +73,116 @@ func (c *Client) WaitForWorkflows(timeout time.Duration) (string, error) {
 			},
 		)
 		if err != nil {
-			handle.Error(fmt.Sprintf("Failed to list check runs: %v", err))
+			c.display.Error(fmt.Sprintf("Failed to list check runs: %v", err))
 			return "", fmt.Errorf("failed to list check runs: %w", err)
 		}
 
 		if checkRuns.GetTotal() == 0 {
-			elapsed := time.Since(start)
-			handle.Update(bullets.InfoLevel, fmt.Sprintf("Waiting for workflows to start... (%s)", formatDuration(elapsed)))
+			// Wait silently for workflows to appear (they'll show as individual spinners when they start)
 			time.Sleep(checkPollInterval)
 			continue
 		}
 
-		allCompleted, conclusion := c.processCheckRuns(checkRuns.CheckRuns, handle, start)
+		// Try to fetch and display job-level information with check tracker
+		allCompleted, conclusion := c.processWorkflowsWithJobTracking(tracker)
+
 		if !allCompleted {
 			time.Sleep(checkPollInterval)
 			continue
 		}
 
+		// All workflows completed - display final summary
 		totalDuration := time.Since(start)
 		if conclusion == conclusionSuccess {
-			handle.Success("All checks passed - total time: " + formatDuration(totalDuration))
+			c.display.Success("Workflows completed successfully - total time: " +
+				formatDuration(totalDuration))
 		} else {
-			msg := fmt.Sprintf("Checks completed with status: %s - total time: %s",
-				conclusion, formatDuration(totalDuration))
-			handle.Warning(msg)
+			msg := "Workflows failed - total time: " +
+				formatDuration(totalDuration)
+			handle := c.display.InfoHandle(msg)
+			handle.Error(msg)
 		}
 		return conclusion, nil
 	}
 
 	totalDuration := time.Since(start)
-	handle.Error("Timeout after " + formatDuration(totalDuration))
+	c.display.Error("Timeout after " + formatDuration(totalDuration))
 	return "", errWorkflowTimeout
 }
 
-// MergePullRequest merges a pull request using the specified merge method.
-// mergeMethod can be "merge", "squash", or "rebase".
-func (c *Client) MergePullRequest(prNumber int, mergeMethod string) error {
-	c.log.Debug(fmt.Sprintf("Merging pull request #%d using method: %s", prNumber, mergeMethod))
-	options := &github.PullRequestOptions{
-		MergeMethod: mergeMethod, // "squash", "merge", or "rebase"
-	}
-
-	_, _, err := c.client.PullRequests.Merge(c.ctx(), c.owner, c.repo, prNumber, "", options)
+// processWorkflowsWithJobTracking processes workflows using checkTracker for individual job display.
+func (c *Client) processWorkflowsWithJobTracking(tracker *checkTracker) (bool, string) {
+	// Try to fetch workflow jobs
+	jobs, err := c.fetchWorkflowJobs()
 	if err != nil {
-		return fmt.Errorf("failed to merge pull request: %w", err)
+		c.log.Debug(fmt.Sprintf("Failed to fetch workflow jobs, falling back to check runs: %v", err))
+		return c.fallbackToCheckRuns(tracker)
 	}
 
-	c.log.Debug("Pull request merged successfully")
-	return nil
+	// If no jobs found, fall back to check runs
+	if len(jobs) == 0 {
+		c.log.Debug("No workflow jobs found, falling back to check runs")
+		return c.fallbackToCheckRuns(tracker)
+	}
+
+	// Update check tracker with new jobs (creates/updates handles automatically)
+	transitions := tracker.update(jobs, c.display.GetUpdatable())
+	for _, transition := range transitions {
+		c.log.Debug(transition)
+	}
+
+	// Analyze job statuses for completion
+	return c.analyzeJobCompletion(jobs)
 }
 
-// GetPullRequestsByHead returns all open pull requests for the given head branch.
-func (c *Client) GetPullRequestsByHead(head string) ([]*github.PullRequest, error) {
-	prs, _, err := c.client.PullRequests.List(c.ctx(), c.owner, c.repo, &github.PullRequestListOptions{
-		Head:  fmt.Sprintf("%s:%s", c.owner, head),
-		State: "open",
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to list pull requests: %w", err)
-	}
-
-	return prs, nil
-}
-
-// DeleteBranch deletes a branch from the remote repository.
-func (c *Client) DeleteBranch(branch string) error {
-	_, err := c.client.Git.DeleteRef(c.ctx(), c.owner, c.repo, "heads/"+branch)
-	if err != nil {
-		return fmt.Errorf("failed to delete branch: %w", err)
-	}
-	return nil
-}
-
-// hasWorkflowRuns checks if there are any workflow runs (in any state) for this PR.
-func (c *Client) hasWorkflowRuns() bool {
-	// Check for workflow runs associated with this commit SHA
-	runs, _, err := c.client.Actions.ListRepositoryWorkflowRuns(
-		c.ctx(), c.owner, c.repo,
-		&github.ListWorkflowRunsOptions{
-			Event:   "pull_request",
-			HeadSHA: c.prSHA,
+// fallbackToCheckRuns attempts to fall back to check runs API.
+func (c *Client) fallbackToCheckRuns(tracker *checkTracker) (bool, string) {
+	checkRuns, _, err := c.client.Checks.ListCheckRunsForRef(
+		c.ctx(), c.owner, c.repo, c.prSHA,
+		&github.ListCheckRunsOptions{
+			ListOptions: github.ListOptions{PerPage: maxCheckRunsPerPage},
 		},
 	)
-	if err != nil {
-		c.log.Debug(fmt.Sprintf("Failed to list workflow runs, assuming workflows exist - error: %v", err))
-		return true // Assume workflows exist on error to be safe
+	if err == nil && checkRuns.GetTotal() > 0 {
+		return c.processCheckRunsFallback(tracker, checkRuns.CheckRuns)
 	}
-
-	if runs.GetTotalCount() > 0 {
-		c.log.Debug(fmt.Sprintf("Found workflow runs for PR, count: %d", runs.GetTotalCount()))
-		return true
-	}
-
-	// Also check suites as they're created even before runs start
-	checkSuites, _, err := c.client.Checks.ListCheckSuitesForRef(
-		c.ctx(), c.owner, c.repo, c.prSHA,
-		&github.ListCheckSuiteOptions{},
-	)
-	if err != nil {
-		c.log.Debug(fmt.Sprintf("Failed to list check suites, assuming workflows exist - error: %v", err))
-		return true // Assume workflows exist on error to be safe
-	}
-
-	if checkSuites.GetTotal() > 0 {
-		c.log.Debug(fmt.Sprintf("Found check suites for PR, count: %d", checkSuites.GetTotal()))
-		return true
-	}
-
-	return false
+	return false, ""
 }
 
-// ctx returns the context for API calls.
-func (c *Client) ctx() context.Context {
-	return context.Background()
+// analyzeJobCompletion checks if all jobs are completed and determines overall conclusion.
+func (c *Client) analyzeJobCompletion(jobs []*JobInfo) (bool, string) {
+	allCompleted := true
+	conclusion := conclusionSuccess
+
+	for _, job := range jobs {
+		switch job.Status {
+		case statusInProgress, statusQueued:
+			allCompleted = false
+		case statusCompleted:
+			if job.Conclusion != conclusionSuccess && job.Conclusion != conclusionSkipped &&
+				job.Conclusion != conclusionNeutral && conclusion == conclusionSuccess {
+				conclusion = job.Conclusion
+			}
+		}
+	}
+
+	return allCompleted, conclusion
+}
+
+// processCheckRunsFallback processes check runs using checkTracker for individual spinners.
+// This is used as a fallback when workflow jobs API is unavailable.
+func (c *Client) processCheckRunsFallback(tracker *checkTracker, checkRuns []*github.CheckRun) (bool, string) {
+	// Convert CheckRuns to JobInfo format for tracker
+	jobs := c.convertCheckRunsToJobInfo(checkRuns)
+
+	// Update check tracker with converted jobs (creates/updates spinners automatically)
+	transitions := tracker.update(jobs, c.display.GetUpdatable())
+	for _, transition := range transitions {
+		c.log.Debug(transition)
+	}
+
+	// Analyze completion status
+	return c.analyzeJobCompletion(jobs)
 }
 
 // GetMergeMethod returns the appropriate merge method string based on squash flag.
@@ -381,125 +206,48 @@ func formatDuration(d time.Duration) string {
 	return fmt.Sprintf("%ds", seconds)
 }
 
-// addReviewers adds reviewers to a pull request, filtering out the PR author.
-func (c *Client) addReviewers(pr *github.PullRequest, reviewers []string) error {
-	prAuthor := pr.User.GetLogin()
-	filteredReviewers := make([]string, 0, len(reviewers))
-	for _, reviewer := range reviewers {
-		if reviewer != prAuthor {
-			filteredReviewers = append(filteredReviewers, reviewer)
-		}
+// formatJobStatus formats a job/check status with duration.
+// Returns a formatted string like "build (running, 1m 23s)" or "test (success, 45s)".
+// Icons are added by the bullets library methods (Success/Error/etc), not by this function.
+func formatJobStatus(job *JobInfo) string {
+	if job == nil {
+		return ""
 	}
 
-	if len(filteredReviewers) > 0 {
-		reviewRequest := github.ReviewersRequest{
-			Reviewers: filteredReviewers,
-		}
-		_, _, err := c.client.PullRequests.RequestReviewers(c.ctx(), c.owner, c.repo, *pr.Number, reviewRequest)
-		if err != nil {
-			return fmt.Errorf("failed to add reviewers: %w", err)
-		}
+	statusText := getJobStatusText(job)
+	durationStr := calculateJobDuration(job)
+
+	// Format the complete status string (without icon - bullets library adds those)
+	if durationStr != "" {
+		return fmt.Sprintf("%s (%s, %s)", job.Name, statusText, durationStr)
 	}
-	return nil
+	return fmt.Sprintf("%s (%s)", job.Name, statusText)
 }
 
-// checkStats holds counters for check run statuses.
-type checkStats struct {
-	running        int
-	queued         int
-	succeeded      int
-	failed         int
-	skipped        int
-	runningChecks  []string
-}
-
-// processCheckRuns evaluates check run statuses and returns completion state and overall conclusion.
-func (c *Client) processCheckRuns(
-	checks []*github.CheckRun, handle *bullets.BulletHandle, startTime time.Time,
-) (bool, string) {
-	allCompleted := true
-	conclusion := conclusionSuccess
-	elapsed := time.Since(startTime)
-
-	stats := c.collectCheckStats(checks, &allCompleted, &conclusion)
-	statusMsg := c.buildCheckStatusMessage(stats, len(checks), elapsed)
-
-	handle.Update(bullets.InfoLevel, statusMsg)
-	return allCompleted, conclusion
-}
-
-// collectCheckStats collects statistics from all check runs.
-func (c *Client) collectCheckStats(
-	checks []*github.CheckRun, allCompleted *bool, conclusion *string,
-) checkStats {
-	stats := checkStats{}
-
-	for _, check := range checks {
-		status := check.GetStatus()
-
-		switch status {
-		case statusInProgress:
-			*allCompleted = false
-			stats.running++
-			stats.runningChecks = append(stats.runningChecks, check.GetName())
-		case statusQueued:
-			*allCompleted = false
-			stats.queued++
-		case statusCompleted:
-			c.processCompletedCheck(check, &stats, conclusion)
-		}
-	}
-
-	return stats
-}
-
-// processCompletedCheck processes a completed check and updates stats.
-func (c *Client) processCompletedCheck(
-	check *github.CheckRun, stats *checkStats, conclusion *string,
-) {
-	checkConclusion := check.GetConclusion()
-
-	switch checkConclusion {
-	case conclusionSuccess:
-		stats.succeeded++
-	case conclusionSkipped, conclusionNeutral:
-		stats.skipped++
+// getJobStatusText returns the appropriate status text for a job.
+func getJobStatusText(job *JobInfo) string {
+	switch job.Status {
+	case statusCompleted:
+		return job.Conclusion
+	case statusInProgress:
+		return "running"
+	case statusQueued:
+		return "queued"
 	default:
-		stats.failed++
-		// Update overall conclusion if this check failed
-		if *conclusion == conclusionSuccess {
-			*conclusion = checkConclusion
-		}
+		return job.Status
 	}
 }
 
-// buildCheckStatusMessage builds a status message from check statistics.
-func (c *Client) buildCheckStatusMessage(stats checkStats, total int, elapsed time.Duration) string {
-	var statusParts []string
-
-	if stats.running > 0 {
-		statusParts = append(statusParts, fmt.Sprintf("%d running", stats.running))
+// calculateJobDuration calculates the duration string for a job.
+func calculateJobDuration(job *JobInfo) string {
+	if job.Status == statusCompleted && job.StartedAt != nil && job.CompletedAt != nil {
+		duration := job.CompletedAt.Sub(*job.StartedAt)
+		return formatDuration(duration)
 	}
-	if stats.queued > 0 {
-		statusParts = append(statusParts, fmt.Sprintf("%d queued", stats.queued))
+	if job.Status == statusInProgress && job.StartedAt != nil {
+		elapsed := time.Since(*job.StartedAt)
+		return formatDuration(elapsed)
 	}
-	if stats.succeeded > 0 {
-		statusParts = append(statusParts, fmt.Sprintf("%d passed", stats.succeeded))
-	}
-	if stats.failed > 0 {
-		statusParts = append(statusParts, fmt.Sprintf("%d failed", stats.failed))
-	}
-	if stats.skipped > 0 {
-		statusParts = append(statusParts, fmt.Sprintf("%d skipped", stats.skipped))
-	}
-
-	statusMsg := fmt.Sprintf("Checks: %s (total: %d) - %s",
-		strings.Join(statusParts, ", "), total, formatDuration(elapsed))
-
-	// Add currently running check names for context
-	if len(stats.runningChecks) > 0 && len(stats.runningChecks) <= 3 {
-		statusMsg += fmt.Sprintf(" [%s]", strings.Join(stats.runningChecks, ", "))
-	}
-
-	return statusMsg
+	return ""
 }
+

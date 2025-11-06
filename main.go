@@ -21,8 +21,8 @@ import (
 )
 
 const (
-	maxLabelsToSelect     = 3
-	pipelineStartupDelay  = 2 * time.Second
+	maxLabelsToSelect      = 3
+	pipelineStartupDelay   = 2 * time.Second
 	defaultPipelineTimeout = 30 * time.Minute
 )
 
@@ -273,7 +273,6 @@ func createGitLabMR(
 }
 
 func waitAndMergeGitLabMR(client *gitlab.Client, mr *gogitlab.MergeRequest, squash bool) error {
-	log.Info("Waiting for pipeline to complete...")
 	time.Sleep(pipelineStartupDelay)
 
 	status, err := client.WaitForPipeline(defaultPipelineTimeout)
@@ -402,7 +401,6 @@ func createGitHubPR(
 }
 
 func waitAndMergeGitHubPR(client *ghclient.Client, pr *github.PullRequest, squash bool) error {
-	log.Info("Waiting for workflows to complete...")
 	time.Sleep(pipelineStartupDelay)
 
 	conclusion, err := client.WaitForWorkflows(defaultPipelineTimeout)
@@ -478,4 +476,3 @@ func cleanup(repo *git.Repository, mainBranch, currentBranch string) error {
 	log.Info("auto-mr completed successfully!")
 	return nil
 }
-
