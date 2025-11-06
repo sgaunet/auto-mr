@@ -339,18 +339,6 @@ func (c *Client) GetMergeRequestsByBranch(sourceBranch string) ([]*gitlab.BasicM
 	return mrs, nil
 }
 
-// pipelineStats holds counters for pipeline statuses.
-type pipelineStats struct {
-	running          int
-	pending          int
-	created          int
-	success          int
-	failed           int
-	canceled         int
-	skipped          int
-	runningPipelines []string
-}
-
 // processPipelinesWithJobTracking evaluates all pipeline statuses using jobTracker for individual job display.
 func (c *Client) processPipelinesWithJobTracking(
 	pipelines []*gitlab.PipelineInfo, tracker *jobTracker, startTime time.Time,
@@ -390,13 +378,15 @@ func (c *Client) processPipelinesWithJobTracking(
 
 	// Collect all jobs from concurrent fetches
 	var allJobs []*Job
+	var failedPipelines []*gitlab.PipelineInfo
+
 	for result := range resultChan {
 		if result.err != nil {
 			c.log.Debug(fmt.Sprintf("Failed to fetch jobs for pipeline %d: %v", result.pipelineID, result.err))
-			// Find the pipeline for fallback processing
+			// Track failed pipelines for fallback processing
 			for _, p := range pipelines {
 				if p.ID == result.pipelineID {
-					c.processPipelineStatus(p, &pipelineStats{}, &allCompleted, &overallStatus)
+					failedPipelines = append(failedPipelines, p)
 					break
 				}
 			}
@@ -405,13 +395,15 @@ func (c *Client) processPipelinesWithJobTracking(
 		allJobs = append(allJobs, result.jobs...)
 	}
 
-	// If no jobs found, fall back to aggregate view
+	// If no jobs found, fall back to pipeline-level view with individual spinners
 	if len(allJobs) == 0 {
-		stats := c.collectPipelineStats(pipelines, &allCompleted, &overallStatus)
-		elapsed := time.Since(startTime)
-		statusMsg := c.buildPipelineStatusMessage(stats, len(pipelines), elapsed)
-		c.updatableLog.Info(statusMsg)
-		return allCompleted, overallStatus
+		return c.processPipelinesFallback(tracker, pipelines)
+	}
+
+	// If some pipelines failed to fetch jobs, convert them to pseudo-jobs for display
+	if len(failedPipelines) > 0 {
+		fallbackJobs := c.convertPipelinesToJobs(failedPipelines)
+		allJobs = append(allJobs, fallbackJobs...)
 	}
 
 	// Update job tracker with new jobs (creates/updates handles automatically)
@@ -436,115 +428,72 @@ func (c *Client) processPipelinesWithJobTracking(
 	return allCompleted, overallStatus
 }
 
-// collectPipelineStats collects statistics from all pipelines.
-func (c *Client) collectPipelineStats(
-	pipelines []*gitlab.PipelineInfo, allCompleted *bool, overallStatus *string,
-) pipelineStats {
-	stats := pipelineStats{}
+// processPipelinesFallback processes pipelines using jobTracker for individual spinners.
+// This is used as a fallback when job-level APIs are unavailable.
+func (c *Client) processPipelinesFallback(tracker *jobTracker, pipelines []*gitlab.PipelineInfo) (bool, string) {
+	// Convert pipelines to Job format for tracker
+	jobs := c.convertPipelinesToJobs(pipelines)
+
+	// Update job tracker with converted jobs (creates/updates spinners automatically)
+	tracker.update(jobs, c.updatableLog)
+
+	// Analyze completion status
+	allCompleted := true
+	overallStatus := statusSuccess
+
+	for _, job := range jobs {
+		switch job.Status {
+		case statusRunning, statusPending, statusCreated:
+			allCompleted = false
+		case statusFailed:
+			if overallStatus == statusSuccess {
+				overallStatus = statusFailed
+			}
+		case statusCanceled:
+			if overallStatus == statusSuccess {
+				overallStatus = statusCanceled
+			}
+		}
+	}
+
+	return allCompleted, overallStatus
+}
+
+// convertPipelinesToJobs converts pipelines to Job format for display with jobTracker.
+func (c *Client) convertPipelinesToJobs(pipelines []*gitlab.PipelineInfo) []*Job {
+	jobs := make([]*Job, 0, len(pipelines))
 
 	for _, pipeline := range pipelines {
-		c.processPipelineStatus(pipeline, &stats, allCompleted, overallStatus)
+		if pipeline == nil {
+			continue
+		}
+
+		// Create a pseudo-job representing the pipeline
+		job := &Job{
+			ID:     pipeline.ID,
+			Name:   fmt.Sprintf("Pipeline #%d", pipeline.ID),
+			Stage:  pipeline.Ref, // Use ref as stage for context
+			Status: pipeline.Status,
+		}
+
+		// Set timestamps if available
+		if pipeline.CreatedAt != nil {
+			job.StartedAt = pipeline.CreatedAt
+		}
+		if pipeline.UpdatedAt != nil {
+			job.FinishedAt = pipeline.UpdatedAt
+		}
+
+		// Calculate duration from timestamps if both available
+		if job.StartedAt != nil && job.FinishedAt != nil {
+			duration := job.FinishedAt.Sub(*job.StartedAt)
+			job.Duration = duration.Seconds()
+		}
+
+		jobs = append(jobs, job)
 	}
 
-	return stats
-}
-
-// processPipelineStatus processes a single pipeline's status.
-func (c *Client) processPipelineStatus(
-	pipeline *gitlab.PipelineInfo, stats *pipelineStats, allCompleted *bool, overallStatus *string,
-) {
-	status := pipeline.Status
-
-	switch status {
-	case statusRunning:
-		c.handleRunningPipeline(pipeline, stats, allCompleted)
-	case statusPending, statusCreated:
-		c.handlePendingPipeline(status, stats, allCompleted)
-	case statusSuccess:
-		stats.success++
-	case statusFailed:
-		c.handleFailedPipeline(stats, overallStatus)
-	case statusCanceled:
-		c.handleCanceledPipeline(stats, overallStatus)
-	case statusSkipped:
-		stats.skipped++
-	default:
-		*allCompleted = false
-	}
-}
-
-// handlePendingPipeline handles a pending or created pipeline.
-func (c *Client) handlePendingPipeline(status string, stats *pipelineStats, allCompleted *bool) {
-	*allCompleted = false
-	if status == statusPending {
-		stats.pending++
-	} else {
-		stats.created++
-	}
-}
-
-// handleFailedPipeline handles a failed pipeline.
-func (c *Client) handleFailedPipeline(stats *pipelineStats, overallStatus *string) {
-	stats.failed++
-	if *overallStatus == statusSuccess {
-		*overallStatus = statusFailed
-	}
-}
-
-// handleCanceledPipeline handles a canceled pipeline.
-func (c *Client) handleCanceledPipeline(stats *pipelineStats, overallStatus *string) {
-	stats.canceled++
-	if *overallStatus == statusSuccess {
-		*overallStatus = statusCanceled
-	}
-}
-
-// handleRunningPipeline handles a running pipeline.
-func (c *Client) handleRunningPipeline(
-	pipeline *gitlab.PipelineInfo, stats *pipelineStats, allCompleted *bool,
-) {
-	*allCompleted = false
-	stats.running++
-	if pipeline.Ref != "" {
-		stats.runningPipelines = append(stats.runningPipelines, fmt.Sprintf("#%d", pipeline.ID))
-	}
-}
-
-// buildPipelineStatusMessage builds a status message from pipeline statistics.
-func (c *Client) buildPipelineStatusMessage(stats pipelineStats, total int, elapsed time.Duration) string {
-	var statusParts []string
-
-	if stats.running > 0 {
-		statusParts = append(statusParts, fmt.Sprintf("%d running", stats.running))
-	}
-	if stats.pending > 0 {
-		statusParts = append(statusParts, fmt.Sprintf("%d pending", stats.pending))
-	}
-	if stats.created > 0 {
-		statusParts = append(statusParts, fmt.Sprintf("%d created", stats.created))
-	}
-	if stats.success > 0 {
-		statusParts = append(statusParts, fmt.Sprintf("%d passed", stats.success))
-	}
-	if stats.failed > 0 {
-		statusParts = append(statusParts, fmt.Sprintf("%d failed", stats.failed))
-	}
-	if stats.canceled > 0 {
-		statusParts = append(statusParts, fmt.Sprintf("%d canceled", stats.canceled))
-	}
-	if stats.skipped > 0 {
-		statusParts = append(statusParts, fmt.Sprintf("%d skipped", stats.skipped))
-	}
-
-	statusMsg := fmt.Sprintf("Pipelines: %s (total: %d) - %s",
-		strings.Join(statusParts, ", "), total, formatDuration(elapsed))
-
-	// Add currently running pipeline IDs for context
-	if len(stats.runningPipelines) > 0 && len(stats.runningPipelines) <= 3 {
-		statusMsg += fmt.Sprintf(" [%s]", strings.Join(stats.runningPipelines, ", "))
-	}
-
-	return statusMsg
+	return jobs
 }
 
 // hasPipelineRuns checks if there are any pipeline runs (in any state) for this MR.

@@ -273,7 +273,6 @@ func createGitLabMR(
 }
 
 func waitAndMergeGitLabMR(client *gitlab.Client, mr *gogitlab.MergeRequest, squash bool) error {
-	log.Info("Waiting for pipeline to complete...")
 	time.Sleep(pipelineStartupDelay)
 
 	status, err := client.WaitForPipeline(defaultPipelineTimeout)
