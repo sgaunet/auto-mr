@@ -15,6 +15,7 @@ const (
 	maxCheckRunsPerPage    = 100
 	maxJobDetailsToDisplay = 3
 	checkPollInterval      = 5 * time.Second
+	workflowCreationDelay  = 5 * time.Second
 	conclusionSuccess      = "success"
 	statusInProgress       = "in_progress"
 	statusQueued           = "queued"

@@ -13,7 +13,6 @@ import (
 	"golang.org/x/oauth2"
 )
 
-
 // NewClient creates a new GitHub client.
 func NewClient() (*Client, error) {
 	token := os.Getenv("GITHUB_TOKEN")
@@ -59,6 +58,7 @@ func (c *Client) WaitForWorkflows(timeout time.Duration) (string, error) {
 
 	// Create updatable handle for workflow status
 	c.display.Info("Waiting for workflows to complete...")
+	time.Sleep(workflowCreationDelay) // Let the time to workflows to be created
 	c.display.IncreasePadding()
 	defer c.display.DecreasePadding()
 
@@ -250,4 +250,3 @@ func calculateJobDuration(job *JobInfo) string {
 	}
 	return ""
 }
-
