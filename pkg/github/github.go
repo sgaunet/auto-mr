@@ -31,9 +31,9 @@ const (
 	conclusionSuccess      = "success"
 	statusInProgress       = "in_progress"
 	statusQueued           = "queued"
-	statusCompleted   = "completed"
-	conclusionSkipped = "skipped"
-	conclusionNeutral = "neutral"
+	statusCompleted        = "completed"
+	conclusionSkipped      = "skipped"
+	conclusionNeutral      = "neutral"
 )
 
 // Client represents a GitHub API client wrapper.
@@ -288,11 +288,11 @@ func (c *Client) WaitForWorkflows(timeout time.Duration) (string, error) {
 		// All workflows completed - display final summary
 		totalDuration := time.Since(start)
 		if conclusion == conclusionSuccess {
-			c.updatableLog.Success(fmt.Sprintf("Workflows completed successfully - total time: %s",
-				formatDuration(totalDuration)))
-		} else {
-			msg := fmt.Sprintf("Workflows failed - total time: %s",
+			c.updatableLog.Success("Workflows completed successfully - total time: " +
 				formatDuration(totalDuration))
+		} else {
+			msg := "Workflows failed - total time: " +
+				formatDuration(totalDuration)
 			handle := c.updatableLog.InfoHandle(msg)
 			handle.Error(msg)
 		}
@@ -383,61 +383,56 @@ func (c *Client) hasWorkflowRuns() bool {
 
 // processWorkflowsWithJobTracking processes workflows using checkTracker for individual job display.
 func (c *Client) processWorkflowsWithJobTracking(tracker *checkTracker) (bool, string) {
-	allCompleted := true
-	conclusion := conclusionSuccess
-
 	// Try to fetch workflow jobs
 	jobs, err := c.fetchWorkflowJobs()
 	if err != nil {
 		c.log.Debug(fmt.Sprintf("Failed to fetch workflow jobs, falling back to check runs: %v", err))
-		// Fall back to check runs (pass tracker for individual spinners)
-		checkRuns, _, err := c.client.Checks.ListCheckRunsForRef(
-			c.ctx(), c.owner, c.repo, c.prSHA,
-			&github.ListCheckRunsOptions{
-				ListOptions: github.ListOptions{PerPage: maxCheckRunsPerPage},
-			},
-		)
-		if err == nil && checkRuns.GetTotal() > 0 {
-			return c.processCheckRunsFallback(tracker, checkRuns.CheckRuns)
-		}
-		return false, ""
+		return c.fallbackToCheckRuns(tracker)
 	}
 
 	// If no jobs found, fall back to check runs
 	if len(jobs) == 0 {
 		c.log.Debug("No workflow jobs found, falling back to check runs")
-		checkRuns, _, err := c.client.Checks.ListCheckRunsForRef(
-			c.ctx(), c.owner, c.repo, c.prSHA,
-			&github.ListCheckRunsOptions{
-				ListOptions: github.ListOptions{PerPage: maxCheckRunsPerPage},
-			},
-		)
-		if err == nil && checkRuns.GetTotal() > 0 {
-			return c.processCheckRunsFallback(tracker, checkRuns.CheckRuns)
-		}
-		return false, ""
+		return c.fallbackToCheckRuns(tracker)
 	}
 
 	// Update check tracker with new jobs (creates/updates handles automatically)
-	tracker.update(jobs, c.updatableLog)
+	transitions := tracker.update(jobs, c.updatableLog)
+	for _, transition := range transitions {
+		c.log.Debug(transition)
+	}
 
 	// Analyze job statuses for completion
+	return c.analyzeJobCompletion(jobs)
+}
+
+// fallbackToCheckRuns attempts to fall back to check runs API.
+func (c *Client) fallbackToCheckRuns(tracker *checkTracker) (bool, string) {
+	checkRuns, _, err := c.client.Checks.ListCheckRunsForRef(
+		c.ctx(), c.owner, c.repo, c.prSHA,
+		&github.ListCheckRunsOptions{
+			ListOptions: github.ListOptions{PerPage: maxCheckRunsPerPage},
+		},
+	)
+	if err == nil && checkRuns.GetTotal() > 0 {
+		return c.processCheckRunsFallback(tracker, checkRuns.CheckRuns)
+	}
+	return false, ""
+}
+
+// analyzeJobCompletion checks if all jobs are completed and determines overall conclusion.
+func (c *Client) analyzeJobCompletion(jobs []*JobInfo) (bool, string) {
+	allCompleted := true
+	conclusion := conclusionSuccess
+
 	for _, job := range jobs {
 		switch job.Status {
 		case statusInProgress, statusQueued:
 			allCompleted = false
 		case statusCompleted:
-			// Check conclusion for completed jobs
-			switch job.Conclusion {
-			case conclusionSuccess:
-				// Success - no change needed
-			case conclusionSkipped, conclusionNeutral:
-				// Neutral/skipped - no change needed
-			default:
-				// Failed, cancelled, or other non-success conclusion
-				if conclusion == conclusionSuccess {
-					conclusion = job.Conclusion
-				}
+			if job.Conclusion != conclusionSuccess && job.Conclusion != conclusionSkipped &&
+				job.Conclusion != conclusionNeutral && conclusion == conclusionSuccess {
+				conclusion = job.Conclusion
 			}
 		}
 	}
@@ -449,6 +444,20 @@ func (c *Client) processWorkflowsWithJobTracking(tracker *checkTracker) (bool, s
 // This is used as a fallback when workflow jobs API is unavailable.
 func (c *Client) processCheckRunsFallback(tracker *checkTracker, checkRuns []*github.CheckRun) (bool, string) {
 	// Convert CheckRuns to JobInfo format for tracker
+	jobs := c.convertCheckRunsToJobInfo(checkRuns)
+
+	// Update check tracker with converted jobs (creates/updates spinners automatically)
+	transitions := tracker.update(jobs, c.updatableLog)
+	for _, transition := range transitions {
+		c.log.Debug(transition)
+	}
+
+	// Analyze completion status
+	return c.analyzeJobCompletion(jobs)
+}
+
+// convertCheckRunsToJobInfo converts GitHub CheckRuns to JobInfo format.
+func (c *Client) convertCheckRunsToJobInfo(checkRuns []*github.CheckRun) []*JobInfo {
 	jobs := make([]*JobInfo, 0, len(checkRuns))
 	for _, check := range checkRuns {
 		if check == nil || check.ID == nil {
@@ -465,45 +474,15 @@ func (c *Client) processCheckRunsFallback(tracker *checkTracker, checkRuns []*gi
 
 		// Set timestamps if available
 		if check.StartedAt != nil {
-			startedAt := check.StartedAt.GetTime()
-			job.StartedAt = startedAt
+			job.StartedAt = check.StartedAt.GetTime()
 		}
 		if check.CompletedAt != nil {
-			completedAt := check.CompletedAt.GetTime()
-			job.CompletedAt = completedAt
+			job.CompletedAt = check.CompletedAt.GetTime()
 		}
 
 		jobs = append(jobs, job)
 	}
-
-	// Update check tracker with converted jobs (creates/updates spinners automatically)
-	tracker.update(jobs, c.updatableLog)
-
-	// Analyze completion status
-	allCompleted := true
-	conclusion := conclusionSuccess
-
-	for _, job := range jobs {
-		switch job.Status {
-		case statusInProgress, statusQueued:
-			allCompleted = false
-		case statusCompleted:
-			// Check conclusion for completed jobs
-			switch job.Conclusion {
-			case conclusionSuccess:
-				// Success - no change needed
-			case conclusionSkipped, conclusionNeutral:
-				// Neutral/skipped - no change needed
-			default:
-				// Failed, cancelled, or other non-success conclusion
-				if conclusion == conclusionSuccess {
-					conclusion = job.Conclusion
-				}
-			}
-		}
-	}
-
-	return allCompleted, conclusion
+	return jobs
 }
 
 // fetchWorkflowJobs fetches all jobs for workflow runs associated with the PR SHA.
@@ -619,34 +598,41 @@ func formatJobStatus(job *JobInfo) string {
 		return ""
 	}
 
-	// Determine status text
-	statusText := job.Status
-	if job.Status == statusCompleted {
-		// Use conclusion for completed jobs
-		statusText = job.Conclusion
-	} else if job.Status == statusInProgress {
-		statusText = "running"
-	} else if job.Status == statusQueued {
-		statusText = "queued"
-	}
-
-	// Calculate duration
-	var durationStr string
-	if job.Status == statusCompleted && job.StartedAt != nil && job.CompletedAt != nil {
-		// Calculate duration for completed jobs
-		duration := job.CompletedAt.Sub(*job.StartedAt)
-		durationStr = formatDuration(duration)
-	} else if job.Status == statusInProgress && job.StartedAt != nil {
-		// Calculate elapsed time for running jobs
-		elapsed := time.Since(*job.StartedAt)
-		durationStr = formatDuration(elapsed)
-	}
+	statusText := getJobStatusText(job)
+	durationStr := calculateJobDuration(job)
 
 	// Format the complete status string (without icon - bullets library adds those)
 	if durationStr != "" {
 		return fmt.Sprintf("%s (%s, %s)", job.Name, statusText, durationStr)
 	}
 	return fmt.Sprintf("%s (%s)", job.Name, statusText)
+}
+
+// getJobStatusText returns the appropriate status text for a job.
+func getJobStatusText(job *JobInfo) string {
+	switch job.Status {
+	case statusCompleted:
+		return job.Conclusion
+	case statusInProgress:
+		return "running"
+	case statusQueued:
+		return "queued"
+	default:
+		return job.Status
+	}
+}
+
+// calculateJobDuration calculates the duration string for a job.
+func calculateJobDuration(job *JobInfo) string {
+	if job.Status == statusCompleted && job.StartedAt != nil && job.CompletedAt != nil {
+		duration := job.CompletedAt.Sub(*job.StartedAt)
+		return formatDuration(duration)
+	}
+	if job.Status == statusInProgress && job.StartedAt != nil {
+		elapsed := time.Since(*job.StartedAt)
+		return formatDuration(elapsed)
+	}
+	return ""
 }
 
 // addReviewers adds reviewers to a pull request, filtering out the PR author.
@@ -735,18 +721,6 @@ func (ct *checkTracker) deleteSpinner(id int64) {
 	}
 }
 
-// deleteCheck removes a job/check and its handle/spinner with write lock.
-func (ct *checkTracker) deleteCheck(id int64) {
-	ct.mu.Lock()
-	defer ct.mu.Unlock()
-	delete(ct.checks, id)
-	delete(ct.handles, id)
-	if spinner, exists := ct.spinners[id]; exists {
-		spinner.Stop() // Stop animation before deleting
-		delete(ct.spinners, id)
-	}
-}
-
 // update processes new jobs/checks, detects state transitions, and updates handles.
 // Returns a list of state transition descriptions.
 func (ct *checkTracker) update(newChecks []*JobInfo, logger *bullets.UpdatableLogger) []string {
@@ -754,60 +728,77 @@ func (ct *checkTracker) update(newChecks []*JobInfo, logger *bullets.UpdatableLo
 	newCheckIDs := make(map[int64]bool)
 
 	for _, newCheck := range newChecks {
-		// Skip nil checks or checks with invalid IDs
-		if newCheck == nil || newCheck.ID == 0 {
-			continue
-		}
-
-		// Handle duplicate check IDs - only process first occurrence
-		if newCheckIDs[newCheck.ID] {
+		if newCheck == nil || newCheck.ID == 0 || newCheckIDs[newCheck.ID] {
 			continue
 		}
 
 		newCheckIDs[newCheck.ID] = true
-		oldCheck, exists := ct.getCheck(newCheck.ID)
-
-		if !exists {
-			// New job detected
-			ct.setCheck(newCheck.ID, newCheck)
-			statusText := formatJobStatus(newCheck)
-
-			if newCheck.Status == statusInProgress {
-				// Running job: create animated spinner
-				spinner := logger.SpinnerCircle(statusText)
-				ct.setSpinner(newCheck.ID, spinner)
-			} else {
-				// Non-running job: create static handle
-				handle := logger.InfoHandle(statusText)
-				ct.setHandle(newCheck.ID, handle)
-			}
-
-			transitions = append(transitions, fmt.Sprintf("Job %d started: %s", newCheck.ID, newCheck.Name))
-		} else if ct.hasStatusChanged(oldCheck, newCheck) {
-			// Status or conclusion changed - update display and handle pulse animation
-			wasPulsing := oldCheck.Status == statusInProgress
-			isPulsing := newCheck.Status == statusInProgress
-
-			ct.updateHandleForCheck(logger, newCheck, wasPulsing, isPulsing)
-			ct.setCheck(newCheck.ID, newCheck)
-			transitions = append(transitions, ct.formatTransition(oldCheck, newCheck))
-		} else {
-			// No status change, just update check data (timestamps may have changed)
-			ct.setCheck(newCheck.ID, newCheck)
-			// Update text for running jobs to show elapsed time (spinner updates automatically)
-			// No action needed - SpinnerCircle displays the status text continuously
+		transition := ct.processCheckUpdate(newCheck, logger)
+		if transition != "" {
+			transitions = append(transitions, transition)
 		}
 	}
 
 	// Detect removed jobs
+	transitions = append(transitions, ct.detectRemovedChecks(newCheckIDs)...)
+
+	return transitions
+}
+
+// processCheckUpdate handles the update logic for a single check.
+func (ct *checkTracker) processCheckUpdate(newCheck *JobInfo, logger *bullets.UpdatableLogger) string {
+	oldCheck, exists := ct.getCheck(newCheck.ID)
+
+	switch {
+	case !exists:
+		return ct.handleNewCheck(newCheck, logger)
+	case ct.hasStatusChanged(oldCheck, newCheck):
+		return ct.handleCheckStatusChange(oldCheck, newCheck, logger)
+	default:
+		ct.setCheck(newCheck.ID, newCheck)
+		return ""
+	}
+}
+
+// handleNewCheck processes a newly detected check.
+func (ct *checkTracker) handleNewCheck(newCheck *JobInfo, logger *bullets.UpdatableLogger) string {
+	ct.setCheck(newCheck.ID, newCheck)
+	statusText := formatJobStatus(newCheck)
+
+	if newCheck.Status == statusInProgress {
+		spinner := logger.SpinnerCircle(statusText)
+		ct.setSpinner(newCheck.ID, spinner)
+	} else {
+		handle := logger.InfoHandle(statusText)
+		ct.setHandle(newCheck.ID, handle)
+	}
+
+	return fmt.Sprintf("Job %d started: %s", newCheck.ID, newCheck.Name)
+}
+
+// handleCheckStatusChange processes a check with changed status.
+func (ct *checkTracker) handleCheckStatusChange(
+	oldCheck, newCheck *JobInfo, logger *bullets.UpdatableLogger,
+) string {
+	wasPulsing := oldCheck.Status == statusInProgress
+	isPulsing := newCheck.Status == statusInProgress
+
+	ct.updateHandleForCheck(logger, newCheck, wasPulsing, isPulsing)
+	ct.setCheck(newCheck.ID, newCheck)
+	return ct.formatTransition(oldCheck, newCheck)
+}
+
+// detectRemovedChecks detects checks that have been removed.
+func (ct *checkTracker) detectRemovedChecks(newCheckIDs map[int64]bool) []string {
+	var transitions []string
 	ct.mu.RLock()
+	defer ct.mu.RUnlock()
+
 	for id := range ct.checks {
 		if !newCheckIDs[id] {
 			transitions = append(transitions, fmt.Sprintf("Job %d removed", id))
 		}
 	}
-	ct.mu.RUnlock()
-
 	return transitions
 }
 
@@ -833,160 +824,201 @@ func (ct *checkTracker) formatTransition(oldCheck, newCheck *JobInfo) string {
 
 // updateHandleForCheck updates display based on job status transitions.
 // Manages transitions between static handles (queued) and animated spinners (running).
-func (ct *checkTracker) updateHandleForCheck(logger *bullets.UpdatableLogger, check *JobInfo, wasPulsing, isPulsing bool) {
+func (ct *checkTracker) updateHandleForCheck(
+	logger *bullets.UpdatableLogger, check *JobInfo, wasPulsing, isPulsing bool,
+) {
 	statusText := formatJobStatus(check)
 
-	// Handle completed jobs - finalize spinner or handle
 	if check.Status == statusCompleted {
-		// If was running, stop spinner with final message
-		if spinner, exists := ct.getSpinner(check.ID); exists {
-			switch check.Conclusion {
-			case conclusionSuccess:
-				spinner.Success(statusText)
-			case conclusionSkipped, conclusionNeutral:
-				spinner.Replace(statusText)
-			default:
-				// Failed, cancelled, or other non-success conclusion
-				spinner.Error(statusText)
-			}
-			ct.deleteSpinner(check.ID)
-		} else if handle, exists := ct.getHandle(check.ID); exists {
-			// Was not running, update handle
-			switch check.Conclusion {
-			case conclusionSuccess:
-				handle.Success(statusText)
-			case conclusionSkipped, conclusionNeutral:
-				handle.Update(bullets.InfoLevel, statusText)
-			default:
-				handle.Error(statusText)
-			}
-		}
+		ct.finalizeCompletedCheck(check, statusText)
 		return
 	}
 
-	// Transition from non-running to running: create spinner
 	if isPulsing && !wasPulsing {
-		// Stop any existing handle
-		if handle, exists := ct.getHandle(check.ID); exists {
-			handle.Update(bullets.InfoLevel, "") // Clear the line
-			ct.mu.Lock()
-			delete(ct.handles, check.ID)
-			ct.mu.Unlock()
-		}
-		// Create animated spinner
-		spinner := logger.SpinnerCircle(statusText)
-		ct.setSpinner(check.ID, spinner)
+		ct.transitionCheckToRunning(logger, check.ID, statusText)
 		return
 	}
 
-	// Transition from running to non-running: create handle
 	if !isPulsing && wasPulsing {
-		// Stop spinner
-		if spinner, exists := ct.getSpinner(check.ID); exists {
-			spinner.Replace(statusText)
-			ct.deleteSpinner(check.ID)
-		}
-		// Create static handle
-		handle := logger.InfoHandle(statusText)
-		ct.setHandle(check.ID, handle)
+		ct.transitionCheckToNonRunning(logger, check.ID, statusText)
 		return
 	}
 
-	// No animation state change - update existing display
-	if _, exists := ct.getSpinner(check.ID); exists {
-		// Spinner is running, no update needed (animation continues)
-		// Spinner doesn't support text updates during animation
+	ct.updateExistingCheckDisplay(check.ID, statusText)
+}
+
+// finalizeCompletedCheck handles completed jobs - finalize spinner or handle.
+func (ct *checkTracker) finalizeCompletedCheck(check *JobInfo, statusText string) {
+	// If was running, stop spinner with final message
+	if spinner, exists := ct.getSpinner(check.ID); exists {
+		ct.finalizeSpinner(spinner, check.Conclusion, statusText)
+		ct.deleteSpinner(check.ID)
 		return
 	}
+
+	// Was not running, update handle
 	if handle, exists := ct.getHandle(check.ID); exists {
+		ct.finalizeHandle(handle, check.Conclusion, statusText)
+	}
+}
+
+// finalizeSpinner stops a spinner with the appropriate final message.
+func (ct *checkTracker) finalizeSpinner(spinner *bullets.Spinner, conclusion, statusText string) {
+	switch conclusion {
+	case conclusionSuccess:
+		spinner.Success(statusText)
+	case conclusionSkipped, conclusionNeutral:
+		spinner.Replace(statusText)
+	default:
+		spinner.Error(statusText)
+	}
+}
+
+// finalizeHandle updates a handle with the appropriate final status.
+func (ct *checkTracker) finalizeHandle(handle *bullets.BulletHandle, conclusion, statusText string) {
+	switch conclusion {
+	case conclusionSuccess:
+		handle.Success(statusText)
+	case conclusionSkipped, conclusionNeutral:
+		handle.Update(bullets.InfoLevel, statusText)
+	default:
+		handle.Error(statusText)
+	}
+}
+
+// transitionCheckToRunning creates a spinner when a check transitions to running state.
+func (ct *checkTracker) transitionCheckToRunning(logger *bullets.UpdatableLogger, checkID int64, statusText string) {
+	// Stop any existing handle
+	if handle, exists := ct.getHandle(checkID); exists {
+		handle.Update(bullets.InfoLevel, "") // Clear the line
+		ct.mu.Lock()
+		delete(ct.handles, checkID)
+		ct.mu.Unlock()
+	}
+	// Create animated spinner
+	spinner := logger.SpinnerCircle(statusText)
+	ct.setSpinner(checkID, spinner)
+}
+
+// transitionCheckToNonRunning creates a handle when a check transitions from running state.
+func (ct *checkTracker) transitionCheckToNonRunning(logger *bullets.UpdatableLogger, checkID int64, statusText string) {
+	// Stop spinner
+	if spinner, exists := ct.getSpinner(checkID); exists {
+		spinner.Replace(statusText)
+		ct.deleteSpinner(checkID)
+	}
+	// Create static handle
+	handle := logger.InfoHandle(statusText)
+	ct.setHandle(checkID, handle)
+}
+
+// updateExistingCheckDisplay updates existing display without animation state change.
+func (ct *checkTracker) updateExistingCheckDisplay(checkID int64, statusText string) {
+	if _, exists := ct.getSpinner(checkID); exists {
+		// Spinner is running, no update needed (animation continues)
+		return
+	}
+	if handle, exists := ct.getHandle(checkID); exists {
 		// Static handle, update text
 		handle.Update(bullets.InfoLevel, statusText)
 	}
 }
 
-// cleanup removes completed jobs after a retention period.
-func (ct *checkTracker) cleanup(retentionPeriod time.Duration) {
-	now := time.Now()
-	ct.mu.Lock()
-	defer ct.mu.Unlock()
+// // cleanup removes completed jobs after a retention period.
+// //
+// //nolint:unused // Used by tests
+// func (ct *checkTracker) cleanup(retentionPeriod time.Duration) {
+// 	now := time.Now()
+// 	ct.mu.Lock()
+// 	defer ct.mu.Unlock()
 
-	for id, check := range ct.checks {
-		if ct.shouldCleanupCheck(check, now, retentionPeriod) {
-			delete(ct.checks, id)
-			delete(ct.handles, id)
-			if spinner, exists := ct.spinners[id]; exists {
-				spinner.Stop()
-				delete(ct.spinners, id)
-			}
-		}
-	}
-}
+// 	for id, check := range ct.checks {
+// 		if ct.shouldCleanupCheck(check, now, retentionPeriod) {
+// 			delete(ct.checks, id)
+// 			delete(ct.handles, id)
+// 			if spinner, exists := ct.spinners[id]; exists {
+// 				spinner.Stop()
+// 				delete(ct.spinners, id)
+// 			}
+// 		}
+// 	}
+// }
 
-// shouldCleanupCheck determines if a job should be cleaned up based on its status and age.
-func (ct *checkTracker) shouldCleanupCheck(check *JobInfo, now time.Time, retention time.Duration) bool {
-	// Only cleanup completed jobs
-	if check.Status != statusCompleted {
-		return false
-	}
+// // shouldCleanupCheck determines if a job should be cleaned up based on its status and age.
+// //
+// //nolint:unused // Used by tests
+// func (ct *checkTracker) shouldCleanupCheck(check *JobInfo, now time.Time, retention time.Duration) bool {
+// 	// Only cleanup completed jobs
+// 	if check.Status != statusCompleted {
+// 		return false
+// 	}
 
-	// Check if job is old enough to cleanup
-	if check.CompletedAt != nil {
-		return now.Sub(*check.CompletedAt) > retention
-	}
+// 	// Check if job is old enough to cleanup
+// 	if check.CompletedAt != nil {
+// 		return now.Sub(*check.CompletedAt) > retention
+// 	}
 
-	return false
-}
+// 	return false
+// }
 
-// reset clears all tracked jobs and handles.
-func (ct *checkTracker) reset() {
-	ct.mu.Lock()
-	defer ct.mu.Unlock()
-	// Stop all spinners before clearing
-	for _, spinner := range ct.spinners {
-		spinner.Stop()
-	}
-	ct.checks = make(map[int64]*JobInfo)
-	ct.handles = make(map[int64]*bullets.BulletHandle)
-	ct.spinners = make(map[int64]*bullets.Spinner)
-}
+// // reset clears all tracked jobs and handles.
+// //
+// //nolint:unused // Used by tests
+// func (ct *checkTracker) reset() {
+// 	ct.mu.Lock()
+// 	defer ct.mu.Unlock()
+// 	// Stop all spinners before clearing
+// 	for _, spinner := range ct.spinners {
+// 		spinner.Stop()
+// 	}
+// 	ct.checks = make(map[int64]*JobInfo)
+// 	ct.handles = make(map[int64]*bullets.BulletHandle)
+// 	ct.spinners = make(map[int64]*bullets.Spinner)
+// }
 
-// getActiveChecks returns jobs that are currently running or queued.
-func (ct *checkTracker) getActiveChecks() []*JobInfo {
-	ct.mu.RLock()
-	defer ct.mu.RUnlock()
+// // getActiveChecks returns jobs that are currently running or queued.
+// //
+// //nolint:unused // Used by tests
+// func (ct *checkTracker) getActiveChecks() []*JobInfo {
+// 	ct.mu.RLock()
+// 	defer ct.mu.RUnlock()
 
-	var active []*JobInfo
-	for _, check := range ct.checks {
-		if check.Status == statusInProgress || check.Status == statusQueued {
-			active = append(active, check)
-		}
-	}
-	return active
-}
+// 	var active []*JobInfo
+// 	for _, check := range ct.checks {
+// 		if check.Status == statusInProgress || check.Status == statusQueued {
+// 			active = append(active, check)
+// 		}
+// 	}
+// 	return active
+// }
 
-// getFailedChecks returns jobs that have failed.
-func (ct *checkTracker) getFailedChecks() []*JobInfo {
-	ct.mu.RLock()
-	defer ct.mu.RUnlock()
+// // getFailedChecks returns jobs that have failed.
+// //
+// //nolint:unused // Used by tests
+// func (ct *checkTracker) getFailedChecks() []*JobInfo {
+// 	ct.mu.RLock()
+// 	defer ct.mu.RUnlock()
 
-	var failed []*JobInfo
-	for _, check := range ct.checks {
-		if check.Status == statusCompleted && check.Conclusion != conclusionSuccess &&
-			check.Conclusion != conclusionSkipped && check.Conclusion != conclusionNeutral {
-			failed = append(failed, check)
-		}
-	}
-	return failed
-}
+// 	var failed []*JobInfo
+// 	for _, check := range ct.checks {
+// 		if check.Status == statusCompleted && check.Conclusion != conclusionSuccess &&
+// 			check.Conclusion != conclusionSkipped && check.Conclusion != conclusionNeutral {
+// 			failed = append(failed, check)
+// 		}
+// 	}
+// 	return failed
+// }
 
-// getAllChecks returns a copy of all tracked jobs.
-func (ct *checkTracker) getAllChecks() []*JobInfo {
-	ct.mu.RLock()
-	defer ct.mu.RUnlock()
+// // getAllChecks returns a copy of all tracked jobs.
+// //
+// //nolint:unused // Used by tests
+// func (ct *checkTracker) getAllChecks() []*JobInfo {
+// 	ct.mu.RLock()
+// 	defer ct.mu.RUnlock()
 
-	checks := make([]*JobInfo, 0, len(ct.checks))
-	for _, check := range ct.checks {
-		checks = append(checks, check)
-	}
-	return checks
-}
+// 	checks := make([]*JobInfo, 0, len(ct.checks))
+// 	for _, check := range ct.checks {
+// 		checks = append(checks, check)
+// 	}
+// 	return checks
+// }

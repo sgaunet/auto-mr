@@ -33,8 +33,8 @@ const (
 	statusPending          = "pending"
 	statusCreated          = "created"
 	statusFailed           = "failed"
-	statusCanceled = "canceled"
-	statusSkipped  = "skipped"
+	statusCanceled         = "canceled"
+	statusSkipped          = "skipped"
 )
 
 // Client represents a GitLab API client wrapper.
@@ -272,7 +272,7 @@ func (c *Client) WaitForPipeline(timeout time.Duration) (string, error) {
 		}
 
 		// Process all pipelines with individual job tracking
-		allCompleted, overallStatus := c.processPipelinesWithJobTracking(pipelines, tracker, start)
+		allCompleted, overallStatus := c.processPipelinesWithJobTracking(pipelines, tracker)
 
 		if !allCompleted {
 			time.Sleep(pipelinePollInterval)
@@ -282,11 +282,11 @@ func (c *Client) WaitForPipeline(timeout time.Duration) (string, error) {
 		// All pipelines completed - display final summary
 		totalDuration := time.Since(start)
 		if overallStatus == statusSuccess {
-			c.updatableLog.Success(fmt.Sprintf("Pipeline completed successfully - total time: %s",
-				formatDuration(totalDuration)))
-		} else {
-			msg := fmt.Sprintf("Pipeline failed - total time: %s",
+			c.updatableLog.Success("Pipeline completed successfully - total time: " +
 				formatDuration(totalDuration))
+		} else {
+			msg := "Pipeline failed - total time: " +
+				formatDuration(totalDuration)
 			handle := c.updatableLog.InfoHandle(msg)
 			handle.Error(msg)
 		}
@@ -341,12 +341,34 @@ func (c *Client) GetMergeRequestsByBranch(sourceBranch string) ([]*gitlab.BasicM
 
 // processPipelinesWithJobTracking evaluates all pipeline statuses using jobTracker for individual job display.
 func (c *Client) processPipelinesWithJobTracking(
-	pipelines []*gitlab.PipelineInfo, tracker *jobTracker, startTime time.Time,
+	pipelines []*gitlab.PipelineInfo, tracker *jobTracker,
 ) (bool, string) {
-	allCompleted := true
-	overallStatus := statusSuccess
+	// Fetch jobs for all pipelines in parallel
+	allJobs, failedPipelines := c.fetchJobsForPipelines(pipelines)
 
-	// Fetch jobs for all pipelines in parallel for better performance with multiple pipelines
+	// If no jobs found, fall back to pipeline-level view with individual spinners
+	if len(allJobs) == 0 {
+		return c.processPipelinesFallback(tracker, pipelines)
+	}
+
+	// If some pipelines failed to fetch jobs, convert them to pseudo-jobs for display
+	if len(failedPipelines) > 0 {
+		fallbackJobs := c.convertPipelinesToJobs(failedPipelines)
+		allJobs = append(allJobs, fallbackJobs...)
+	}
+
+	// Update job tracker with new jobs (creates/updates handles automatically)
+	transitions := tracker.update(allJobs, c.updatableLog)
+	for _, transition := range transitions {
+		c.log.Debug(transition)
+	}
+
+	// Analyze job statuses for completion
+	return c.analyzePipelineJobCompletion(allJobs)
+}
+
+// fetchJobsForPipelines fetches jobs for multiple pipelines concurrently.
+func (c *Client) fetchJobsForPipelines(pipelines []*gitlab.PipelineInfo) ([]*Job, []*gitlab.PipelineInfo) {
 	type pipelineJobs struct {
 		pipelineID int
 		jobs       []*Job
@@ -395,21 +417,14 @@ func (c *Client) processPipelinesWithJobTracking(
 		allJobs = append(allJobs, result.jobs...)
 	}
 
-	// If no jobs found, fall back to pipeline-level view with individual spinners
-	if len(allJobs) == 0 {
-		return c.processPipelinesFallback(tracker, pipelines)
-	}
+	return allJobs, failedPipelines
+}
 
-	// If some pipelines failed to fetch jobs, convert them to pseudo-jobs for display
-	if len(failedPipelines) > 0 {
-		fallbackJobs := c.convertPipelinesToJobs(failedPipelines)
-		allJobs = append(allJobs, fallbackJobs...)
-	}
+// analyzePipelineJobCompletion checks if all jobs are completed and determines overall status.
+func (c *Client) analyzePipelineJobCompletion(allJobs []*Job) (bool, string) {
+	allCompleted := true
+	overallStatus := statusSuccess
 
-	// Update job tracker with new jobs (creates/updates handles automatically)
-	tracker.update(allJobs, c.updatableLog)
-
-	// Analyze job statuses for completion
 	for _, job := range allJobs {
 		switch job.Status {
 		case statusRunning, statusPending, statusCreated:
@@ -435,7 +450,10 @@ func (c *Client) processPipelinesFallback(tracker *jobTracker, pipelines []*gitl
 	jobs := c.convertPipelinesToJobs(pipelines)
 
 	// Update job tracker with converted jobs (creates/updates spinners automatically)
-	tracker.update(jobs, c.updatableLog)
+	transitions := tracker.update(jobs, c.updatableLog)
+	for _, transition := range transitions {
+		c.log.Debug(transition)
+	}
 
 	// Analyze completion status
 	allCompleted := true
@@ -675,14 +693,6 @@ func (jt *jobTracker) deleteSpinner(id int) {
 	}
 }
 
-// deleteJob removes a job and its handle with write lock.
-func (jt *jobTracker) deleteJob(id int) {
-	jt.mu.Lock()
-	defer jt.mu.Unlock()
-	delete(jt.jobs, id)
-	delete(jt.handles, id)
-}
-
 // update processes new jobs, detects state transitions, and updates handles.
 // Returns a list of state transition descriptions.
 func (jt *jobTracker) update(newJobs []*Job, logger *bullets.UpdatableLogger) []string {
@@ -690,64 +700,87 @@ func (jt *jobTracker) update(newJobs []*Job, logger *bullets.UpdatableLogger) []
 	newJobIDs := make(map[int]bool)
 
 	for _, newJob := range newJobs {
-		// Skip nil jobs or jobs with invalid IDs
-		if newJob == nil || newJob.ID == 0 {
-			continue
-		}
-
-		// Handle duplicate job IDs - only process first occurrence
-		if newJobIDs[newJob.ID] {
+		if newJob == nil || newJob.ID == 0 || newJobIDs[newJob.ID] {
 			continue
 		}
 
 		newJobIDs[newJob.ID] = true
-		oldJob, exists := jt.getJob(newJob.ID)
-
-		if !exists {
-			// New job detected
-			jt.setJob(newJob.ID, newJob)
-			statusText := formatJobStatus(newJob)
-
-			if newJob.Status == statusRunning {
-				// Create animated spinner for running jobs
-				spinner := logger.SpinnerCircle(statusText)
-				jt.setSpinner(newJob.ID, spinner)
-			} else {
-				// Create static handle for non-running jobs
-				handle := logger.InfoHandle(statusText)
-				jt.setHandle(newJob.ID, handle)
-			}
-			transitions = append(transitions, fmt.Sprintf("Job %d started: %s/%s", newJob.ID, newJob.Stage, newJob.Name))
-		} else if oldJob.Status != newJob.Status {
-			// Status changed - update display and handle state transitions
-			wasPulsing := oldJob.Status == statusRunning
-			isPulsing := newJob.Status == statusRunning
-
-			jt.updateHandleForJob(logger, newJob, wasPulsing, isPulsing)
-			jt.setJob(newJob.ID, newJob)
-			transitions = append(transitions, fmt.Sprintf("Job %d: %s -> %s", newJob.ID, oldJob.Status, newJob.Status))
-		} else {
-			// No status change, just update job data (timestamps/duration may have changed)
-			jt.setJob(newJob.ID, newJob)
-			// Update text only for non-running jobs (spinners display automatically)
-			if newJob.Status != statusRunning {
-				if handle, exists := jt.getHandle(newJob.ID); exists {
-					statusText := formatJobStatus(newJob)
-					handle.Update(bullets.InfoLevel, statusText)
-				}
-			}
+		transition := jt.processJobUpdate(newJob, logger)
+		if transition != "" {
+			transitions = append(transitions, transition)
 		}
 	}
 
 	// Detect removed jobs
+	transitions = append(transitions, jt.detectRemovedJobs(newJobIDs)...)
+
+	return transitions
+}
+
+// processJobUpdate handles the update logic for a single job.
+func (jt *jobTracker) processJobUpdate(newJob *Job, logger *bullets.UpdatableLogger) string {
+	oldJob, exists := jt.getJob(newJob.ID)
+
+	switch {
+	case !exists:
+		return jt.handleNewJob(newJob, logger)
+	case oldJob.Status != newJob.Status:
+		return jt.handleJobStatusChange(oldJob, newJob, logger)
+	default:
+		return jt.handleJobDataUpdate(newJob)
+	}
+}
+
+// handleNewJob processes a newly detected job.
+func (jt *jobTracker) handleNewJob(newJob *Job, logger *bullets.UpdatableLogger) string {
+	jt.setJob(newJob.ID, newJob)
+	statusText := formatJobStatus(newJob)
+
+	if newJob.Status == statusRunning {
+		spinner := logger.SpinnerCircle(statusText)
+		jt.setSpinner(newJob.ID, spinner)
+	} else {
+		handle := logger.InfoHandle(statusText)
+		jt.setHandle(newJob.ID, handle)
+	}
+
+	return fmt.Sprintf("Job %d started: %s/%s", newJob.ID, newJob.Stage, newJob.Name)
+}
+
+// handleJobStatusChange processes a job with changed status.
+func (jt *jobTracker) handleJobStatusChange(oldJob, newJob *Job, logger *bullets.UpdatableLogger) string {
+	wasPulsing := oldJob.Status == statusRunning
+	isPulsing := newJob.Status == statusRunning
+
+	jt.updateHandleForJob(logger, newJob, wasPulsing, isPulsing)
+	jt.setJob(newJob.ID, newJob)
+	return fmt.Sprintf("Job %d: %s -> %s", newJob.ID, oldJob.Status, newJob.Status)
+}
+
+// handleJobDataUpdate updates job data without status change.
+func (jt *jobTracker) handleJobDataUpdate(newJob *Job) string {
+	jt.setJob(newJob.ID, newJob)
+	// Update text only for non-running jobs (spinners display automatically)
+	if newJob.Status != statusRunning {
+		if handle, exists := jt.getHandle(newJob.ID); exists {
+			statusText := formatJobStatus(newJob)
+			handle.Update(bullets.InfoLevel, statusText)
+		}
+	}
+	return ""
+}
+
+// detectRemovedJobs detects jobs that have been removed.
+func (jt *jobTracker) detectRemovedJobs(newJobIDs map[int]bool) []string {
+	var transitions []string
 	jt.mu.RLock()
+	defer jt.mu.RUnlock()
+
 	for id := range jt.jobs {
 		if !newJobIDs[id] {
 			transitions = append(transitions, fmt.Sprintf("Job %d removed", id))
 		}
 	}
-	jt.mu.RUnlock()
-
 	return transitions
 }
 
@@ -756,157 +789,197 @@ func (jt *jobTracker) update(newJobs []*Job, logger *bullets.UpdatableLogger) []
 func (jt *jobTracker) updateHandleForJob(logger *bullets.UpdatableLogger, job *Job, wasPulsing, isPulsing bool) {
 	statusText := formatJobStatus(job)
 
-	// Handle completed jobs - finalize spinner or handle
 	if job.Status == statusSuccess || job.Status == statusFailed || job.Status == statusCanceled {
-		// If was running, stop spinner with final message
-		if spinner, exists := jt.getSpinner(job.ID); exists {
-			switch job.Status {
-			case statusSuccess:
-				spinner.Success(statusText)
-			case statusCanceled:
-				spinner.Replace(statusText) // Use Replace for canceled (neutral outcome)
-			default:
-				spinner.Error(statusText)
-			}
-			jt.deleteSpinner(job.ID)
-		} else if handle, exists := jt.getHandle(job.ID); exists {
-			// Was not running, update handle
-			switch job.Status {
-			case statusSuccess:
-				handle.Success(statusText)
-			case statusCanceled:
-				handle.Warning(statusText)
-			default:
-				handle.Error(statusText)
-			}
-		}
+		jt.finalizeCompletedJob(job, statusText)
 		return
 	}
 
-	// Transition from non-running to running: create spinner
 	if isPulsing && !wasPulsing {
-		// Stop any existing handle
-		if handle, exists := jt.getHandle(job.ID); exists {
-			handle.Update(bullets.InfoLevel, "") // Clear the line
-			jt.mu.Lock()
-			delete(jt.handles, job.ID)
-			jt.mu.Unlock()
-		}
-		// Create animated spinner
-		spinner := logger.SpinnerCircle(statusText)
-		jt.setSpinner(job.ID, spinner)
+		jt.transitionJobToRunning(logger, job.ID, statusText)
 		return
 	}
 
-	// Transition from running to non-running: create handle
 	if !isPulsing && wasPulsing {
-		// Stop spinner
-		if spinner, exists := jt.getSpinner(job.ID); exists {
-			spinner.Replace(statusText)
-			jt.deleteSpinner(job.ID)
-		}
-		// Create static handle
-		handle := logger.InfoHandle(statusText)
-		jt.setHandle(job.ID, handle)
+		jt.transitionJobToNonRunning(logger, job.ID, statusText)
 		return
 	}
 
-	// No animation state change - update existing display
-	if _, exists := jt.getSpinner(job.ID); exists {
-		// Spinner is running, no update needed (animation continues)
-		// Spinner doesn't support text updates during animation
+	jt.updateExistingJobDisplay(job.ID, statusText)
+}
+
+// finalizeCompletedJob handles completed jobs - finalize spinner or handle.
+func (jt *jobTracker) finalizeCompletedJob(job *Job, statusText string) {
+	// If was running, stop spinner with final message
+	if spinner, exists := jt.getSpinner(job.ID); exists {
+		jt.finalizeJobSpinner(spinner, job.Status, statusText)
+		jt.deleteSpinner(job.ID)
 		return
 	}
+
+	// Was not running, update handle
 	if handle, exists := jt.getHandle(job.ID); exists {
+		jt.finalizeJobHandle(handle, job.Status, statusText)
+	}
+}
+
+// finalizeJobSpinner stops a spinner with the appropriate final message.
+func (jt *jobTracker) finalizeJobSpinner(spinner *bullets.Spinner, status, statusText string) {
+	switch status {
+	case statusSuccess:
+		spinner.Success(statusText)
+	case statusCanceled:
+		spinner.Replace(statusText) // Use Replace for canceled (neutral outcome)
+	default:
+		spinner.Error(statusText)
+	}
+}
+
+// finalizeJobHandle updates a handle with the appropriate final status.
+func (jt *jobTracker) finalizeJobHandle(handle *bullets.BulletHandle, status, statusText string) {
+	switch status {
+	case statusSuccess:
+		handle.Success(statusText)
+	case statusCanceled:
+		handle.Warning(statusText)
+	default:
+		handle.Error(statusText)
+	}
+}
+
+// transitionJobToRunning creates a spinner when a job transitions to running state.
+func (jt *jobTracker) transitionJobToRunning(logger *bullets.UpdatableLogger, jobID int, statusText string) {
+	// Stop any existing handle
+	if handle, exists := jt.getHandle(jobID); exists {
+		handle.Update(bullets.InfoLevel, "") // Clear the line
+		jt.mu.Lock()
+		delete(jt.handles, jobID)
+		jt.mu.Unlock()
+	}
+	// Create animated spinner
+	spinner := logger.SpinnerCircle(statusText)
+	jt.setSpinner(jobID, spinner)
+}
+
+// transitionJobToNonRunning creates a handle when a job transitions from running state.
+func (jt *jobTracker) transitionJobToNonRunning(logger *bullets.UpdatableLogger, jobID int, statusText string) {
+	// Stop spinner
+	if spinner, exists := jt.getSpinner(jobID); exists {
+		spinner.Replace(statusText)
+		jt.deleteSpinner(jobID)
+	}
+	// Create static handle
+	handle := logger.InfoHandle(statusText)
+	jt.setHandle(jobID, handle)
+}
+
+// updateExistingJobDisplay updates existing display without animation state change.
+func (jt *jobTracker) updateExistingJobDisplay(jobID int, statusText string) {
+	if _, exists := jt.getSpinner(jobID); exists {
+		// Spinner is running, no update needed (animation continues)
+		return
+	}
+	if handle, exists := jt.getHandle(jobID); exists {
 		// Static handle, update text
 		handle.Update(bullets.InfoLevel, statusText)
 	}
 }
 
-// cleanup removes completed, failed, canceled, or skipped jobs after a timeout.
-func (jt *jobTracker) cleanup(retentionPeriod time.Duration) {
-	now := time.Now()
-	jt.mu.Lock()
-	defer jt.mu.Unlock()
+// // cleanup removes completed, failed, canceled, or skipped jobs after a timeout.
+// //
+// //nolint:unused // Used by tests
+// func (jt *jobTracker) cleanup(retentionPeriod time.Duration) {
+// 	now := time.Now()
+// 	jt.mu.Lock()
+// 	defer jt.mu.Unlock()
 
-	for id, job := range jt.jobs {
-		if jt.shouldCleanupJob(job, now, retentionPeriod) {
-			delete(jt.jobs, id)
-			delete(jt.handles, id)
-			// Stop and cleanup any spinners
-			if spinner, exists := jt.spinners[id]; exists {
-				spinner.Stop()
-				delete(jt.spinners, id)
-			}
-		}
-	}
-}
+// 	for id, job := range jt.jobs {
+// 		if jt.shouldCleanupJob(job, now, retentionPeriod) {
+// 			delete(jt.jobs, id)
+// 			delete(jt.handles, id)
+// 			// Stop and cleanup any spinners
+// 			if spinner, exists := jt.spinners[id]; exists {
+// 				spinner.Stop()
+// 				delete(jt.spinners, id)
+// 			}
+// 		}
+// 	}
+// }
 
-// shouldCleanupJob determines if a job should be cleaned up based on its status and age.
-func (jt *jobTracker) shouldCleanupJob(job *Job, now time.Time, retention time.Duration) bool {
-	// Only cleanup completed, failed, canceled, or skipped jobs
-	if job.Status != statusSuccess && job.Status != statusFailed &&
-		job.Status != statusCanceled && job.Status != statusSkipped {
-		return false
-	}
+// // shouldCleanupJob determines if a job should be cleaned up based on its status and age.
+// //
+// //nolint:unused // Used by tests
+// func (jt *jobTracker) shouldCleanupJob(job *Job, now time.Time, retention time.Duration) bool {
+// 	// Only cleanup completed, failed, canceled, or skipped jobs
+// 	if job.Status != statusSuccess && job.Status != statusFailed &&
+// 		job.Status != statusCanceled && job.Status != statusSkipped {
+// 		return false
+// 	}
 
-	// Check if job is old enough to cleanup
-	if job.FinishedAt != nil {
-		return now.Sub(*job.FinishedAt) > retention
-	}
+// 	// Check if job is old enough to cleanup
+// 	if job.FinishedAt != nil {
+// 		return now.Sub(*job.FinishedAt) > retention
+// 	}
 
-	return false
-}
+// 	return false
+// }
 
-// reset clears all tracked jobs and handles.
-func (jt *jobTracker) reset() {
-	jt.mu.Lock()
-	defer jt.mu.Unlock()
-	// Stop all spinners before clearing
-	for _, spinner := range jt.spinners {
-		spinner.Stop()
-	}
-	jt.jobs = make(map[int]*Job)
-	jt.handles = make(map[int]*bullets.BulletHandle)
-	jt.spinners = make(map[int]*bullets.Spinner)
-}
+// // reset clears all tracked jobs and handles.
+// //
+// //nolint:unused // Used by tests
+// func (jt *jobTracker) reset() {
+// 	jt.mu.Lock()
+// 	defer jt.mu.Unlock()
+// 	// Stop all spinners before clearing
+// 	for _, spinner := range jt.spinners {
+// 		spinner.Stop()
+// 	}
+// 	jt.jobs = make(map[int]*Job)
+// 	jt.handles = make(map[int]*bullets.BulletHandle)
+// 	jt.spinners = make(map[int]*bullets.Spinner)
+// }
 
-// getActiveJobs returns jobs that are currently running or pending.
-func (jt *jobTracker) getActiveJobs() []*Job {
-	jt.mu.RLock()
-	defer jt.mu.RUnlock()
+// // getActiveJobs returns jobs that are currently running or pending.
+// //
+// //nolint:unused // Used by tests
+// func (jt *jobTracker) getActiveJobs() []*Job {
+// 	jt.mu.RLock()
+// 	defer jt.mu.RUnlock()
 
-	var active []*Job
-	for _, job := range jt.jobs {
-		if job.Status == statusRunning || job.Status == statusPending || job.Status == statusCreated {
-			active = append(active, job)
-		}
-	}
-	return active
-}
+// 	var active []*Job
+// 	for _, job := range jt.jobs {
+// 		if job.Status == statusRunning || job.Status == statusPending || job.Status == statusCreated {
+// 			active = append(active, job)
+// 		}
+// 	}
+// 	return active
+// }
 
-// getFailedJobs returns jobs that have failed.
-func (jt *jobTracker) getFailedJobs() []*Job {
-	jt.mu.RLock()
-	defer jt.mu.RUnlock()
+// // getFailedJobs returns jobs that have failed.
+// //
+// //nolint:unused // Used by tests
+// func (jt *jobTracker) getFailedJobs() []*Job {
+// 	jt.mu.RLock()
+// 	defer jt.mu.RUnlock()
 
-	var failed []*Job
-	for _, job := range jt.jobs {
-		if job.Status == statusFailed {
-			failed = append(failed, job)
-		}
-	}
-	return failed
-}
+// 	var failed []*Job
+// 	for _, job := range jt.jobs {
+// 		if job.Status == statusFailed {
+// 			failed = append(failed, job)
+// 		}
+// 	}
+// 	return failed
+// }
 
-// getAllJobs returns a copy of all tracked jobs.
-func (jt *jobTracker) getAllJobs() []*Job {
-	jt.mu.RLock()
-	defer jt.mu.RUnlock()
+// // getAllJobs returns a copy of all tracked jobs.
+// //
+// //nolint:unused // Used by tests
+// func (jt *jobTracker) getAllJobs() []*Job {
+// 	jt.mu.RLock()
+// 	defer jt.mu.RUnlock()
 
-	jobs := make([]*Job, 0, len(jt.jobs))
-	for _, job := range jt.jobs {
-		jobs = append(jobs, job)
-	}
-	return jobs
-}
+// 	jobs := make([]*Job, 0, len(jt.jobs))
+// 	for _, job := range jt.jobs {
+// 		jobs = append(jobs, job)
+// 	}
+// 	return jobs
+// }
