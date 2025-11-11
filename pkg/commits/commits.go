@@ -19,6 +19,11 @@ const (
 	DefaultShortHashLength = 7
 )
 
+var (
+	// errStopIteration is used internally to stop commit iteration.
+	errStopIteration = errors.New("stop iteration")
+)
+
 // Retriever handles commit history retrieval and message selection.
 type Retriever struct {
 	repo   *git.Repository
@@ -83,12 +88,78 @@ func (r *Retriever) GetCommits(branch string) ([]Commit, error) {
 	return commits, nil
 }
 
+// GetCommitsSinceBranch retrieves commits from currentBranch since it diverged from baseBranch.
+// Only returns commits unique to currentBranch (not present in baseBranch).
+// Returns empty slice if no commits exist since divergence.
+// Returns error if branches don't exist or git operation fails.
+func (r *Retriever) GetCommitsSinceBranch(currentBranch, baseBranch string) ([]Commit, error) {
+	r.logger.Debug("retrieving commits since branch divergence",
+		"currentBranch", currentBranch,
+		"baseBranch", baseBranch)
+
+	// Get reference for current branch
+	currentRef, err := r.repo.Reference(plumbing.NewBranchReferenceName(currentBranch), true)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get reference for branch %s: %w", currentBranch, err)
+	}
+
+	// Get reference for base branch
+	baseRef, err := r.repo.Reference(plumbing.NewBranchReferenceName(baseBranch), true)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get reference for base branch %s: %w", baseBranch, err)
+	}
+
+	// Get commit iterator starting from current branch HEAD
+	commitIter, err := r.repo.Log(&git.LogOptions{From: currentRef.Hash()})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get commit log for branch %s: %w", currentBranch, err)
+	}
+
+	commits := make([]Commit, 0)
+	err = commitIter.ForEach(func(c *object.Commit) error {
+		// Stop if we've reached the base branch commit (divergence point)
+		if c.Hash == baseRef.Hash() {
+			return errStopIteration
+		}
+
+		// Stop if we've reached the limit
+		if len(commits) >= MaxCommitsToRetrieve {
+			return storer.ErrStop
+		}
+
+		// Parse and add commit
+		commit := ParseCommit(c)
+		commits = append(commits, commit)
+
+		return nil
+	})
+
+	if err != nil && !errors.Is(err, errStopIteration) && !errors.Is(err, storer.ErrStop) {
+		return nil, fmt.Errorf("failed to iterate commits for branch %s: %w", currentBranch, err)
+	}
+
+	r.logger.Debug("retrieved commits since divergence",
+		"currentBranch", currentBranch,
+		"baseBranch", baseBranch,
+		"count", len(commits))
+
+	if len(commits) == 0 {
+		return nil, ErrNoCommits
+	}
+
+	return commits, nil
+}
+
 // GetMessageForMR determines which commit message to use for MR/PR.
 // Handles auto-selection, interactive selection, and manual override.
+// Only retrieves commits unique to the feature branch (since divergence from mainBranch).
 // Returns ErrNoCommits if no valid commits exist.
 // Returns ErrAllCommitsInvalid if all commits are merge commits or have empty messages.
-func (r *Retriever) GetMessageForMR(branch string, msgFlagValue string) (MessageSelection, error) {
-	r.logger.Debug("getting message for MR/PR", "branch", branch, "manual_msg", msgFlagValue != "")
+func (r *Retriever) GetMessageForMR(branch, mainBranch, msgFlagValue string) (MessageSelection, error) {
+	r.logger.Debug("getting message for MR/PR",
+		"branch", branch,
+		"mainBranch", mainBranch,
+		"manual_msg", msgFlagValue != "")
 
 	// Priority 1: Manual override flag
 	if msgFlagValue != "" {
@@ -102,8 +173,8 @@ func (r *Retriever) GetMessageForMR(branch string, msgFlagValue string) (Message
 		}, nil
 	}
 
-	// Priority 2: Retrieve commits from branch
-	allCommits, err := r.GetCommits(branch)
+	// Priority 2: Retrieve commits from branch (only commits since divergence from main)
+	allCommits, err := r.GetCommitsSinceBranch(branch, mainBranch)
 	if err != nil {
 		return MessageSelection{}, err
 	}
