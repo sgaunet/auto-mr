@@ -1,4 +1,3 @@
-// Package github provides GitHub API client operations.
 package github
 
 import (

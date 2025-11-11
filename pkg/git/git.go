@@ -433,6 +433,12 @@ func (r *Repository) GetRemoteURL(remoteName string) (string, error) {
 	return urls[0], nil
 }
 
+// GoGitRepository returns the underlying go-git Repository.
+// This is used by the commits package to retrieve commit history.
+func (r *Repository) GoGitRepository() *git.Repository {
+	return r.repo
+}
+
 func (r *Repository) branchExists(branchName string) bool {
 	_, err := r.repo.Reference(plumbing.NewBranchReferenceName(branchName), true)
 	return err == nil

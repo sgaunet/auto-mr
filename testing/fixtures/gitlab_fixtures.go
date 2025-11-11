@@ -1,4 +1,3 @@
-// Package fixtures provides common test data structures for testing.
 package fixtures
 
 import (

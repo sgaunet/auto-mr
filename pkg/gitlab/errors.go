@@ -1,4 +1,3 @@
-// Package gitlab provides GitLab API client operations.
 package gitlab
 
 import "errors"
@@ -12,11 +11,16 @@ var (
 	errPipelineTimeout  = errors.New("timeout waiting for pipeline completion")
 	errMRNotFound       = errors.New("no merge request found for branch")
 
-	// Exported errors for testing and external use.
-	ErrTokenRequired    = errTokenRequired
+	// ErrTokenRequired is returned when GITLAB_TOKEN environment variable is missing.
+	ErrTokenRequired = errTokenRequired
+	// ErrInvalidURLFormat is returned when the GitLab URL format is invalid.
 	ErrInvalidURLFormat = errInvalidURLFormat
+	// ErrAssigneeNotFound is returned when the assignee user cannot be found.
 	ErrAssigneeNotFound = errAssigneeNotFound
+	// ErrReviewerNotFound is returned when the reviewer user cannot be found.
 	ErrReviewerNotFound = errReviewerNotFound
-	ErrPipelineTimeout  = errPipelineTimeout
-	ErrMRNotFound       = errMRNotFound
+	// ErrPipelineTimeout is returned when waiting for pipeline completion times out.
+	ErrPipelineTimeout = errPipelineTimeout
+	// ErrMRNotFound is returned when no merge request is found for the branch.
+	ErrMRNotFound = errMRNotFound
 )

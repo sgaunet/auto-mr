@@ -4,6 +4,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/google/go-github/v69/github"
 	"github.com/sgaunet/auto-mr/internal/logger"
 	"github.com/sgaunet/auto-mr/internal/ui"
+	"github.com/sgaunet/auto-mr/pkg/commits"
 	"github.com/sgaunet/auto-mr/pkg/config"
 	"github.com/sgaunet/auto-mr/pkg/git"
 	ghclient "github.com/sgaunet/auto-mr/pkg/github"
@@ -37,6 +39,7 @@ var (
 	logLevel    string
 	showVersion bool
 	squash      bool
+	msg         string
 	log         *bullets.Logger
 )
 
@@ -66,6 +69,8 @@ func init() {
 	rootCmd.Flags().BoolVarP(&showVersion, "version", "v", false, "Print version and exit")
 	rootCmd.Flags().BoolVar(&squash, "squash", false,
 		"Squash commits when merging (default: false, preserves commit history)")
+	rootCmd.Flags().StringVar(&msg, "msg", "",
+		"Custom message for MR/PR (overrides commit message selection)")
 }
 
 func main() {
@@ -147,14 +152,72 @@ func prepareRepository(repo *git.Repository, currentBranch string) error {
 }
 
 func getCommitInfo(repo *git.Repository) (string, string, error) {
-	commitMessage, err := repo.GetLatestCommitMessage()
+	slogLogger := createSlogLogger()
+
+	// Create commit retriever
+	retriever := commits.NewRetriever(repo.GoGitRepository())
+	retriever.SetLogger(slogLogger)
+
+	// Get current branch name
+	currentBranch, err := repo.GetCurrentBranch()
 	if err != nil {
-		return "", "", fmt.Errorf("failed to get commit message: %w", err)
+		return "", "", fmt.Errorf("failed to get current branch: %w", err)
 	}
 
-	title := strings.Split(commitMessage, "\n")[0]
-	body := commitMessage
-	return title, body, nil
+	// Get message selection (handles manual override, auto-select, and interactive selection)
+	selection, err := retriever.GetMessageForMR(currentBranch, msg)
+	if err != nil {
+		selection, err = handleInteractiveSelection(retriever, currentBranch, slogLogger, err)
+		if err != nil {
+			return "", "", err
+		}
+	}
+
+	return selection.Title, selection.Body, nil
+}
+
+func createSlogLogger() *slog.Logger {
+	var slogLevel slog.Level
+	switch logLevel {
+	case "debug":
+		slogLevel = slog.LevelDebug
+	case "info":
+		slogLevel = slog.LevelInfo
+	case "warn":
+		slogLevel = slog.LevelWarn
+	case "error":
+		slogLevel = slog.LevelError
+	default:
+		slogLevel = slog.LevelInfo
+	}
+	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slogLevel}))
+}
+
+func handleInteractiveSelection(
+	retriever *commits.Retriever,
+	currentBranch string,
+	slogLogger *slog.Logger,
+	origErr error,
+) (commits.MessageSelection, error) {
+	// If multiple commits found, use interactive selector
+	if errors.Is(origErr, commits.ErrMultipleCommitsFound) {
+		selector := commits.NewSelector(commits.NewRenderer())
+		selector.SetLogger(slogLogger)
+
+		// Get all commits
+		allCommits, getErr := retriever.GetCommits(currentBranch)
+		if getErr != nil {
+			return commits.MessageSelection{}, fmt.Errorf("failed to get commits: %w", getErr)
+		}
+
+		// Use selector for interactive selection
+		selection, err := selector.GetMessageForMR(allCommits, msg)
+		if err != nil {
+			return commits.MessageSelection{}, fmt.Errorf("failed to select commit message: %w", err)
+		}
+		return selection, nil
+	}
+	return commits.MessageSelection{}, fmt.Errorf("failed to get commit message: %w", origErr)
 }
 
 func routeToPlatform(
