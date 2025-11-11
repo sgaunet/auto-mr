@@ -164,10 +164,16 @@ func getCommitInfo(repo *git.Repository) (string, string, error) {
 		return "", "", fmt.Errorf("failed to get current branch: %w", err)
 	}
 
-	// Get message selection (handles manual override, auto-select, and interactive selection)
-	selection, err := retriever.GetMessageForMR(currentBranch, msg)
+	// Get main branch name
+	mainBranch, err := repo.GetMainBranch()
 	if err != nil {
-		selection, err = handleInteractiveSelection(retriever, currentBranch, slogLogger, err)
+		return "", "", fmt.Errorf("failed to get main branch: %w", err)
+	}
+
+	// Get message selection (handles manual override, auto-select, and interactive selection)
+	selection, err := retriever.GetMessageForMR(currentBranch, mainBranch, msg)
+	if err != nil {
+		selection, err = handleInteractiveSelection(retriever, currentBranch, mainBranch, slogLogger, err)
 		if err != nil {
 			return "", "", err
 		}
@@ -196,6 +202,7 @@ func createSlogLogger() *slog.Logger {
 func handleInteractiveSelection(
 	retriever *commits.Retriever,
 	currentBranch string,
+	mainBranch string,
 	slogLogger *slog.Logger,
 	origErr error,
 ) (commits.MessageSelection, error) {
@@ -204,8 +211,8 @@ func handleInteractiveSelection(
 		selector := commits.NewSelector(commits.NewRenderer())
 		selector.SetLogger(slogLogger)
 
-		// Get all commits
-		allCommits, getErr := retriever.GetCommits(currentBranch)
+		// Get commits since divergence from main branch
+		allCommits, getErr := retriever.GetCommitsSinceBranch(currentBranch, mainBranch)
 		if getErr != nil {
 			return commits.MessageSelection{}, fmt.Errorf("failed to get commits: %w", getErr)
 		}
