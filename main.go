@@ -388,7 +388,7 @@ func handleGitHub(cfg *config.Config, currentBranch, mainBranch, title, body str
 		return err
 	}
 
-	if err := waitAndMergeGitHubPR(client, pr, squash); err != nil {
+	if err := waitAndMergeGitHubPR(client, pr, title, body, squash); err != nil {
 		return err
 	}
 
@@ -470,7 +470,12 @@ func createGitHubPR(
 	return pr, nil
 }
 
-func waitAndMergeGitHubPR(client *ghclient.Client, pr *github.PullRequest, squash bool) error {
+func waitAndMergeGitHubPR(
+	client *ghclient.Client,
+	pr *github.PullRequest,
+	commitTitle, commitBody string,
+	squash bool,
+) error {
 	time.Sleep(pipelineStartupDelay)
 
 	conclusion, err := client.WaitForWorkflows(defaultPipelineTimeout)
@@ -486,7 +491,7 @@ func waitAndMergeGitHubPR(client *ghclient.Client, pr *github.PullRequest, squas
 	log.IncreasePadding()
 
 	mergeMethod := ghclient.GetMergeMethod(squash)
-	if err := client.MergePullRequest(*pr.Number, mergeMethod); err != nil {
+	if err := client.MergePullRequest(*pr.Number, mergeMethod, commitTitle, commitBody); err != nil {
 		log.DecreasePadding()
 		return fmt.Errorf("failed to merge pull request: %w", err)
 	}

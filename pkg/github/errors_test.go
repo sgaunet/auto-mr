@@ -151,7 +151,7 @@ func TestErrorAPIFailures(t *testing.T) {
 		mockAPI := mocks.NewGitHubAPIClient()
 		mockAPI.MergePullRequestError = errors.New("405 Method Not Allowed")
 
-		err := mockAPI.MergePullRequest(123, "squash")
+		err := mockAPI.MergePullRequest(123, "squash", "Test commit", "Test body")
 		if err == nil {
 			t.Error("Expected merge error")
 		}
@@ -285,7 +285,7 @@ func TestErrorAuthenticationFailures(t *testing.T) {
 		mockAPI := mocks.NewGitHubAPIClient()
 		mockAPI.MergePullRequestError = errors.New("403 Resource not accessible by integration")
 
-		err := mockAPI.MergePullRequest(123, "squash")
+		err := mockAPI.MergePullRequest(123, "squash", "Test commit", "Test body")
 		if err == nil {
 			t.Error("Expected insufficient permissions error")
 		}

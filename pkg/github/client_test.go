@@ -298,7 +298,7 @@ func TestMergePullRequest(t *testing.T) {
 		t.Run("merge with "+strategy.method, func(t *testing.T) {
 			mockAPI := mocks.NewGitHubAPIClient()
 
-			err := mockAPI.MergePullRequest(123, strategy.method)
+			err := mockAPI.MergePullRequest(123, strategy.method, "Test commit", "Test body")
 			if err != nil {
 				t.Fatalf("Unexpected error: %v", err)
 			}
@@ -319,7 +319,7 @@ func TestMergePullRequest(t *testing.T) {
 		mockAPI := mocks.NewGitHubAPIClient()
 		mockAPI.MergePullRequestError = ghpkg.ErrInvalidURLFormat
 
-		err := mockAPI.MergePullRequest(123, "merge")
+		err := mockAPI.MergePullRequest(123, "merge", "Test commit", "Test body")
 		if err == nil {
 			t.Error("Expected merge error")
 		}
