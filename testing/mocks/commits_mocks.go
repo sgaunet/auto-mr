@@ -1,3 +1,4 @@
+// Package mocks provides mock implementations for testing.
 package mocks
 
 import "github.com/sgaunet/auto-mr/pkg/commits"
@@ -55,7 +56,7 @@ func NewMockMessageSelector() *MockMessageSelector {
 }
 
 // GetMessageForMR implements commits.MessageSelector interface.
-func (m *MockMessageSelector) GetMessageForMR(cmts []commits.Commit, msgFlagValue string) (commits.MessageSelection, error) {
+func (m *MockMessageSelector) GetMessageForMR(_ []commits.Commit, _ string) (commits.MessageSelection, error) {
 	m.CallHistory = append(m.CallHistory, "GetMessageForMR")
 	m.CallCount["GetMessageForMR"]++
 	return m.GetMessageForMRResponse, m.GetMessageForMRError
@@ -91,7 +92,7 @@ func NewMockSelectionRenderer() *MockSelectionRenderer {
 }
 
 // DisplaySelectionPrompt implements commits.SelectionRenderer interface.
-func (m *MockSelectionRenderer) DisplaySelectionPrompt(cmts []commits.Commit) (int, error) {
+func (m *MockSelectionRenderer) DisplaySelectionPrompt(_ []commits.Commit) (int, error) {
 	m.CallHistory = append(m.CallHistory, "DisplaySelectionPrompt")
 	m.CallCount["DisplaySelectionPrompt"]++
 	return m.DisplaySelectionPromptResponse, m.DisplaySelectionPromptError

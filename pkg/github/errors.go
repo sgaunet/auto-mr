@@ -1,4 +1,3 @@
-// Package github provides GitHub API client operations.
 package github
 
 import "errors"
@@ -10,9 +9,12 @@ var (
 	errWorkflowTimeout  = errors.New("timeout waiting for workflow completion")
 	errPRNotFound       = errors.New("no pull request found for branch")
 
-	// Exported errors for testing and external use.
-	ErrTokenRequired    = errTokenRequired
+	// ErrTokenRequired is returned when GITHUB_TOKEN environment variable is missing.
+	ErrTokenRequired = errTokenRequired
+	// ErrInvalidURLFormat is returned when the GitHub URL format is invalid.
 	ErrInvalidURLFormat = errInvalidURLFormat
-	ErrWorkflowTimeout  = errWorkflowTimeout
-	ErrPRNotFound       = errPRNotFound
+	// ErrWorkflowTimeout is returned when waiting for workflow completion times out.
+	ErrWorkflowTimeout = errWorkflowTimeout
+	// ErrPRNotFound is returned when no pull request is found for the branch.
+	ErrPRNotFound = errPRNotFound
 )

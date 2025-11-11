@@ -1,8 +1,8 @@
-// Package mocks provides mock implementations for testing.
 package mocks
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -35,7 +35,7 @@ type GitHubAPIClient struct {
 // MethodCall represents a tracked method call with its parameters.
 type MethodCall struct {
 	Method string
-	Args   map[string]interface{}
+	Args   map[string]any
 }
 
 // NewGitHubAPIClient creates a new mock GitHub API client.
@@ -47,7 +47,7 @@ func NewGitHubAPIClient() *GitHubAPIClient {
 
 // SetRepositoryFromURL implements github.APIClient.
 func (m *GitHubAPIClient) SetRepositoryFromURL(url string) error {
-	m.trackCall("SetRepositoryFromURL", map[string]interface{}{
+	m.trackCall("SetRepositoryFromURL", map[string]any{
 		"url": url,
 	})
 	return m.SetRepositoryFromURLError
@@ -55,7 +55,7 @@ func (m *GitHubAPIClient) SetRepositoryFromURL(url string) error {
 
 // ListLabels implements github.APIClient.
 func (m *GitHubAPIClient) ListLabels() ([]*ghpkg.Label, error) {
-	m.trackCall("ListLabels", map[string]interface{}{})
+	m.trackCall("ListLabels", map[string]any{})
 	return m.ListLabelsResponse, m.ListLabelsError
 }
 
@@ -64,7 +64,7 @@ func (m *GitHubAPIClient) CreatePullRequest(
 	head, base, title, body string,
 	assignees, reviewers, labels []string,
 ) (*github.PullRequest, error) {
-	m.trackCall("CreatePullRequest", map[string]interface{}{
+	m.trackCall("CreatePullRequest", map[string]any{
 		"head":      head,
 		"base":      base,
 		"title":     title,
@@ -78,7 +78,7 @@ func (m *GitHubAPIClient) CreatePullRequest(
 
 // GetPullRequestByBranch implements github.APIClient.
 func (m *GitHubAPIClient) GetPullRequestByBranch(head, base string) (*github.PullRequest, error) {
-	m.trackCall("GetPullRequestByBranch", map[string]interface{}{
+	m.trackCall("GetPullRequestByBranch", map[string]any{
 		"head": head,
 		"base": base,
 	})
@@ -87,7 +87,7 @@ func (m *GitHubAPIClient) GetPullRequestByBranch(head, base string) (*github.Pul
 
 // WaitForWorkflows implements github.APIClient.
 func (m *GitHubAPIClient) WaitForWorkflows(timeout time.Duration) (string, error) {
-	m.trackCall("WaitForWorkflows", map[string]interface{}{
+	m.trackCall("WaitForWorkflows", map[string]any{
 		"timeout": timeout,
 	})
 	return m.WaitForWorkflowsConclusion, m.WaitForWorkflowsError
@@ -95,7 +95,7 @@ func (m *GitHubAPIClient) WaitForWorkflows(timeout time.Duration) (string, error
 
 // MergePullRequest implements github.APIClient.
 func (m *GitHubAPIClient) MergePullRequest(prNumber int, mergeMethod string) error {
-	m.trackCall("MergePullRequest", map[string]interface{}{
+	m.trackCall("MergePullRequest", map[string]any{
 		"prNumber":    prNumber,
 		"mergeMethod": mergeMethod,
 	})
@@ -104,7 +104,7 @@ func (m *GitHubAPIClient) MergePullRequest(prNumber int, mergeMethod string) err
 
 // GetPullRequestsByHead implements github.APIClient.
 func (m *GitHubAPIClient) GetPullRequestsByHead(head string) ([]*github.PullRequest, error) {
-	m.trackCall("GetPullRequestsByHead", map[string]interface{}{
+	m.trackCall("GetPullRequestsByHead", map[string]any{
 		"head": head,
 	})
 	return m.GetPullRequestsByHeadResponse, m.GetPullRequestsByHeadError
@@ -112,7 +112,7 @@ func (m *GitHubAPIClient) GetPullRequestsByHead(head string) ([]*github.PullRequ
 
 // DeleteBranch implements github.APIClient.
 func (m *GitHubAPIClient) DeleteBranch(branch string) error {
-	m.trackCall("DeleteBranch", map[string]interface{}{
+	m.trackCall("DeleteBranch", map[string]any{
 		"branch": branch,
 	})
 	return m.DeleteBranchError
@@ -158,7 +158,7 @@ func (m *GitHubAPIClient) Reset() {
 }
 
 // trackCall records a method call with its arguments.
-func (m *GitHubAPIClient) trackCall(method string, args map[string]interface{}) {
+func (m *GitHubAPIClient) trackCall(method string, args map[string]any) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.calls = append(m.calls, MethodCall{
@@ -264,11 +264,11 @@ func (m *MockDisplayRenderer) Reset() {
 func (m *MockDisplayRenderer) String() string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	var result string
+	var result strings.Builder
 	for i, msg := range m.messages {
-		result += fmt.Sprintf("[%d] %s: %s\n", i, msg.Level, msg.Message)
+		result.WriteString(fmt.Sprintf("[%d] %s: %s\n", i, msg.Level, msg.Message))
 	}
-	return result
+	return result.String()
 }
 
 // trackMessage records a display message.
