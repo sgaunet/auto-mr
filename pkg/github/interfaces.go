@@ -35,7 +35,8 @@ type APIClient interface {
 
 	// MergePullRequest merges a pull request using the specified merge method.
 	// mergeMethod can be "merge", "squash", or "rebase".
-	MergePullRequest(prNumber int, mergeMethod string) error
+	// commitTitle and commitBody are used as the merge commit message.
+	MergePullRequest(prNumber int, mergeMethod, commitTitle, commitBody string) error
 
 	// GetPullRequestsByHead returns all open pull requests for the given head branch.
 	GetPullRequestsByHead(head string) ([]*github.PullRequest, error)
