@@ -39,7 +39,7 @@ type APIClient interface {
 
 	// MergeMergeRequest merges a merge request with optional squash.
 	// Returns an error if the merge fails.
-	MergeMergeRequest(mrIID int, squash bool) error
+	MergeMergeRequest(mrIID int, squash bool, commitTitle string) error
 
 	// GetMergeRequestsByBranch returns all open merge requests for the given source branch.
 	GetMergeRequestsByBranch(sourceBranch string) ([]*gitlab.BasicMergeRequest, error)

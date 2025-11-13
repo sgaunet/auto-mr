@@ -299,7 +299,7 @@ func TestMergeMergeRequest(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			mockAPI := mocks.NewGitLabAPIClient()
 
-			err := mockAPI.MergeMergeRequest(123, tt.squash)
+			err := mockAPI.MergeMergeRequest(123, tt.squash, "Test commit")
 			if err != nil {
 				t.Fatalf("Failed to merge MR: %v", err)
 			}
@@ -309,6 +309,9 @@ func TestMergeMergeRequest(t *testing.T) {
 			if lastCall.Args["squash"] != tt.squash {
 				t.Errorf("Expected squash %v, got %v", tt.squash, lastCall.Args["squash"])
 			}
+			if lastCall.Args["commitTitle"] != "Test commit" {
+				t.Errorf("Expected commitTitle 'Test commit', got %v", lastCall.Args["commitTitle"])
+			}
 		})
 	}
 
@@ -316,7 +319,7 @@ func TestMergeMergeRequest(t *testing.T) {
 		mockAPI := mocks.NewGitLabAPIClient()
 		mockAPI.MergeMergeRequestError = gitlab.ErrMRNotFound
 
-		err := mockAPI.MergeMergeRequest(123, false)
+		err := mockAPI.MergeMergeRequest(123, false, "Test commit")
 		if err == nil {
 			t.Error("Expected error but got nil")
 		}

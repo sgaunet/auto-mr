@@ -259,7 +259,7 @@ func handleGitLab(cfg *config.Config, currentBranch, mainBranch, title, body str
 		return err
 	}
 
-	if err := waitAndMergeGitLabMR(client, mr, squash); err != nil {
+	if err := waitAndMergeGitLabMR(client, mr, squash, title); err != nil {
 		return err
 	}
 
@@ -342,7 +342,7 @@ func createGitLabMR(
 	return mr, nil
 }
 
-func waitAndMergeGitLabMR(client *gitlab.Client, mr *gogitlab.MergeRequest, squash bool) error {
+func waitAndMergeGitLabMR(client *gitlab.Client, mr *gogitlab.MergeRequest, squash bool, commitTitle string) error {
 	time.Sleep(pipelineStartupDelay)
 
 	status, err := client.WaitForPipeline(defaultPipelineTimeout)
@@ -362,7 +362,7 @@ func waitAndMergeGitLabMR(client *gitlab.Client, mr *gogitlab.MergeRequest, squa
 		log.Warnf("Failed to approve merge request: %v", err)
 	}
 
-	if err := client.MergeMergeRequest(mr.IID, squash); err != nil {
+	if err := client.MergeMergeRequest(mr.IID, squash, commitTitle); err != nil {
 		log.DecreasePadding()
 		return fmt.Errorf("failed to merge MR: %w", err)
 	}
@@ -388,7 +388,7 @@ func handleGitHub(cfg *config.Config, currentBranch, mainBranch, title, body str
 		return err
 	}
 
-	if err := waitAndMergeGitHubPR(client, pr, title, body, squash); err != nil {
+	if err := waitAndMergeGitHubPR(client, pr, title, squash); err != nil {
 		return err
 	}
 
@@ -473,7 +473,7 @@ func createGitHubPR(
 func waitAndMergeGitHubPR(
 	client *ghclient.Client,
 	pr *github.PullRequest,
-	commitTitle, commitBody string,
+	commitTitle string,
 	squash bool,
 ) error {
 	time.Sleep(pipelineStartupDelay)
@@ -491,7 +491,7 @@ func waitAndMergeGitHubPR(
 	log.IncreasePadding()
 
 	mergeMethod := ghclient.GetMergeMethod(squash)
-	if err := client.MergePullRequest(*pr.Number, mergeMethod, commitTitle, commitBody); err != nil {
+	if err := client.MergePullRequest(*pr.Number, mergeMethod, commitTitle); err != nil {
 		log.DecreasePadding()
 		return fmt.Errorf("failed to merge pull request: %w", err)
 	}

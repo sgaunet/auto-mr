@@ -195,7 +195,7 @@ func TestEdgeCaseBoundaryValues(t *testing.T) {
 		mockAPI := mocks.NewGitHubAPIClient()
 
 		// PR number 0 might be treated as invalid
-		err := mockAPI.MergePullRequest(0, "squash", "Test commit", "Test body")
+		err := mockAPI.MergePullRequest(0, "squash", "Test commit")
 		// Behavior depends on implementation - just verify it's handled
 		_ = err
 	})
@@ -204,7 +204,7 @@ func TestEdgeCaseBoundaryValues(t *testing.T) {
 		mockAPI := mocks.NewGitHubAPIClient()
 
 		// Negative PR number should be invalid
-		err := mockAPI.MergePullRequest(-1, "squash", "Test commit", "Test body")
+		err := mockAPI.MergePullRequest(-1, "squash", "Test commit")
 		// Behavior depends on implementation - just verify it's handled
 		_ = err
 	})

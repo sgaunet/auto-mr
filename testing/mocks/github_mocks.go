@@ -94,12 +94,11 @@ func (m *GitHubAPIClient) WaitForWorkflows(timeout time.Duration) (string, error
 }
 
 // MergePullRequest implements github.APIClient.
-func (m *GitHubAPIClient) MergePullRequest(prNumber int, mergeMethod, commitTitle, commitBody string) error {
+func (m *GitHubAPIClient) MergePullRequest(prNumber int, mergeMethod, commitTitle string) error {
 	m.trackCall("MergePullRequest", map[string]any{
 		"prNumber":    prNumber,
 		"mergeMethod": mergeMethod,
 		"commitTitle": commitTitle,
-		"commitBody":  commitBody,
 	})
 	return m.MergePullRequestError
 }

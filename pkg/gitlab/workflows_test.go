@@ -37,7 +37,7 @@ func TestWorkflowMRCreationToMerge(t *testing.T) {
 		}
 
 		// Step 4: Merge MR
-		err = mockAPI.MergeMergeRequest(123, false)
+		err = mockAPI.MergeMergeRequest(123, false, "Test commit")
 		if err != nil {
 			t.Fatalf("Failed to merge MR: %v", err)
 		}
@@ -114,7 +114,7 @@ func TestWorkflowMRUpdateAndRetry(t *testing.T) {
 
 		// Now approve and merge
 		_ = mockAPI.ApproveMergeRequest(123)
-		_ = mockAPI.MergeMergeRequest(123, false)
+		_ = mockAPI.MergeMergeRequest(123, false, "Test commit")
 
 		// Verify retry pattern
 		if mockAPI.GetCallCount("WaitForPipeline") != 2 {
@@ -142,7 +142,7 @@ func TestWorkflowFindExistingMR(t *testing.T) {
 
 		// Approve and merge existing MR
 		_ = mockAPI.ApproveMergeRequest(123)
-		_ = mockAPI.MergeMergeRequest(123, false)
+		_ = mockAPI.MergeMergeRequest(123, false, "Test commit")
 
 		// Verify workflow
 		if mockAPI.GetCallCount("GetMergeRequestByBranch") != 1 {
@@ -181,12 +181,15 @@ func TestWorkflowSquashMerge(t *testing.T) {
 
 			// Approve and merge with specific squash setting
 			_ = mockAPI.ApproveMergeRequest(123)
-			_ = mockAPI.MergeMergeRequest(123, tt.squash)
+			_ = mockAPI.MergeMergeRequest(123, tt.squash, "Test commit")
 
 			// Verify squash setting
 			lastCall := mockAPI.GetLastCall("MergeMergeRequest")
 			if lastCall.Args["squash"] != tt.squash {
 				t.Errorf("Expected squash %v, got %v", tt.squash, lastCall.Args["squash"])
+			}
+			if lastCall.Args["commitTitle"] != "Test commit" {
+				t.Errorf("Expected commitTitle 'Test commit', got %v", lastCall.Args["commitTitle"])
 			}
 		})
 	}
@@ -225,7 +228,7 @@ func TestWorkflowWithLabels(t *testing.T) {
 		mockAPI.WaitForPipelineStatus = "success"
 		_, _ = mockAPI.WaitForPipeline(5 * time.Minute)
 		_ = mockAPI.ApproveMergeRequest(123)
-		_ = mockAPI.MergeMergeRequest(123, false)
+		_ = mockAPI.MergeMergeRequest(123, false, "Test commit")
 	})
 }
 
@@ -252,7 +255,7 @@ func TestWorkflowApprovalScenarios(t *testing.T) {
 		}
 
 		// Merge after approval
-		err = mockAPI.MergeMergeRequest(123, false)
+		err = mockAPI.MergeMergeRequest(123, false, "Test commit")
 		if err != nil {
 			t.Fatalf("Failed to merge MR: %v", err)
 		}
