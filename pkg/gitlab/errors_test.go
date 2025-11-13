@@ -98,7 +98,7 @@ func TestErrorAPIFailures(t *testing.T) {
 				m.MergeMergeRequestError = gitlab.ErrMRNotFound
 			},
 			testFunc: func(m *mocks.GitLabAPIClient) error {
-				return m.MergeMergeRequest(123, false)
+				return m.MergeMergeRequest(123, false, "Test commit")
 			},
 		},
 		{

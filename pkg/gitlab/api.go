@@ -258,12 +258,19 @@ func (c *Client) ApproveMergeRequest(mrIID int) error {
 }
 
 // MergeMergeRequest merges a merge request.
-func (c *Client) MergeMergeRequest(mrIID int, squash bool) error {
+func (c *Client) MergeMergeRequest(mrIID int, squash bool, commitTitle string) error {
 	c.log.Debug(fmt.Sprintf("Merging merge request, IID: %d", mrIID))
 
 	mergeOptions := &gitlab.AcceptMergeRequestOptions{
 		Squash:                   gitlab.Ptr(squash),
 		ShouldRemoveSourceBranch: gitlab.Ptr(true),
+	}
+
+	// Set commit message based on squash mode
+	if squash {
+		mergeOptions.SquashCommitMessage = gitlab.Ptr(commitTitle)
+	} else {
+		mergeOptions.MergeCommitMessage = gitlab.Ptr(commitTitle)
 	}
 
 	_, _, err := c.client.MergeRequests.AcceptMergeRequest(c.projectID, mrIID, mergeOptions)

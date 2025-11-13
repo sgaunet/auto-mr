@@ -39,7 +39,7 @@ func TestWorkflowPRCreationToMerge(t *testing.T) {
 		}
 
 		// Step 3: Merge PR
-		err = mockAPI.MergePullRequest(*pr.Number, "squash", "Test commit", "Test body")
+		err = mockAPI.MergePullRequest(*pr.Number, "squash", "Test commit")
 		if err != nil {
 			t.Fatalf("Failed to merge PR: %v", err)
 		}
@@ -126,7 +126,7 @@ func TestWorkflowPRUpdateAndRetry(t *testing.T) {
 		}
 
 		// Now merge
-		err = mockAPI.MergePullRequest(*pr.Number, "squash", "Test commit", "Test body")
+		err = mockAPI.MergePullRequest(*pr.Number, "squash", "Test commit")
 		if err != nil {
 			t.Fatalf("Failed to merge PR: %v", err)
 		}
@@ -199,7 +199,7 @@ func TestWorkflowBranchCleanup(t *testing.T) {
 		mockAPI.WaitForWorkflowsConclusion = "success"
 		_, _ = mockAPI.WaitForWorkflows(5 * time.Minute)
 
-		err := mockAPI.MergePullRequest(*pr.Number, "squash", "Test commit", "Test body")
+		err := mockAPI.MergePullRequest(*pr.Number, "squash", "Test commit")
 		if err != nil {
 			t.Fatalf("Failed to merge PR: %v", err)
 		}
@@ -245,7 +245,7 @@ func TestWorkflowFindExistingPR(t *testing.T) {
 		}
 
 		// Merge existing PR
-		err = mockAPI.MergePullRequest(*pr.Number, "merge", "Test commit", "Test body")
+		err = mockAPI.MergePullRequest(*pr.Number, "merge", "Test commit")
 		if err != nil {
 			t.Fatalf("Failed to merge existing PR: %v", err)
 		}
@@ -312,7 +312,7 @@ func TestWorkflowMergeStrategies(t *testing.T) {
 			_, _ = mockAPI.WaitForWorkflows(5 * time.Minute)
 
 			// Merge with specific strategy
-			err := mockAPI.MergePullRequest(*pr.Number, strategy.method, "Test commit", "Test body")
+			err := mockAPI.MergePullRequest(*pr.Number, strategy.method, "Test commit")
 			if err != nil {
 				t.Fatalf("Failed to merge with %s: %v", strategy.method, err)
 			}
@@ -366,7 +366,7 @@ func TestWorkflowWithLabels(t *testing.T) {
 		// Complete workflow
 		mockAPI.WaitForWorkflowsConclusion = "success"
 		_, _ = mockAPI.WaitForWorkflows(5 * time.Minute)
-		_ = mockAPI.MergePullRequest(*pr.Number, "squash", "Test commit", "Test body")
+		_ = mockAPI.MergePullRequest(*pr.Number, "squash", "Test commit")
 	})
 }
 
@@ -424,6 +424,6 @@ func TestWorkflowStateValidation(t *testing.T) {
 		// Proceed with workflow
 		mockAPI.WaitForWorkflowsConclusion = "success"
 		_, _ = mockAPI.WaitForWorkflows(5 * time.Minute)
-		_ = mockAPI.MergePullRequest(*pr.Number, "squash", "Test commit", "Test body")
+		_ = mockAPI.MergePullRequest(*pr.Number, "squash", "Test commit")
 	})
 }

@@ -151,16 +151,16 @@ func (c *Client) GetPullRequestByBranch(head, base string) (*github.PullRequest,
 
 // MergePullRequest merges a pull request using the specified merge method.
 // mergeMethod can be "merge", "squash", or "rebase".
-// commitTitle and commitBody are used as the merge commit message.
-func (c *Client) MergePullRequest(prNumber int, mergeMethod, commitTitle, commitBody string) error {
+// commitTitle is used as the merge commit message.
+func (c *Client) MergePullRequest(prNumber int, mergeMethod, commitTitle string) error {
 	c.log.Debug(fmt.Sprintf("Merging pull request #%d using method: %s", prNumber, mergeMethod))
 	options := &github.PullRequestOptions{
 		MergeMethod: mergeMethod, // "squash", "merge", or "rebase"
 		CommitTitle: commitTitle,  // Use selected commit title as merge commit title
 	}
 
-	// Pass commit body as the merge commit message
-	_, _, err := c.client.PullRequests.Merge(c.ctx(), c.owner, c.repo, prNumber, commitBody, options)
+	// Pass commit title as the merge commit message
+	_, _, err := c.client.PullRequests.Merge(c.ctx(), c.owner, c.repo, prNumber, commitTitle, options)
 	if err != nil {
 		return fmt.Errorf("failed to merge pull request: %w", err)
 	}

@@ -94,10 +94,11 @@ func (m *GitLabAPIClient) ApproveMergeRequest(mrIID int) error {
 }
 
 // MergeMergeRequest implements gitlab.APIClient.
-func (m *GitLabAPIClient) MergeMergeRequest(mrIID int, squash bool) error {
+func (m *GitLabAPIClient) MergeMergeRequest(mrIID int, squash bool, commitTitle string) error {
 	m.trackCall("MergeMergeRequest", map[string]any{
-		"mrIID":  mrIID,
-		"squash": squash,
+		"mrIID":       mrIID,
+		"squash":      squash,
+		"commitTitle": commitTitle,
 	})
 	return m.MergeMergeRequestError
 }
