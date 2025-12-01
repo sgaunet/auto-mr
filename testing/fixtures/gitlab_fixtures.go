@@ -42,7 +42,7 @@ func ValidMergeRequest() *gitlab.MergeRequest {
 }
 
 // SuccessfulPipeline returns a successful GitLab pipeline for testing.
-func SuccessfulPipeline(id int, sha string) *gitlab.PipelineInfo {
+func SuccessfulPipeline(id int64, sha string) *gitlab.PipelineInfo {
 	now := time.Now()
 	updated := now.Add(successfulPipelineDuration)
 	return &gitlab.PipelineInfo{
@@ -57,7 +57,7 @@ func SuccessfulPipeline(id int, sha string) *gitlab.PipelineInfo {
 }
 
 // FailedPipeline returns a failed GitLab pipeline for testing.
-func FailedPipeline(id int, sha string) *gitlab.PipelineInfo {
+func FailedPipeline(id int64, sha string) *gitlab.PipelineInfo {
 	now := time.Now()
 	updated := now.Add(failedPipelineDuration)
 	return &gitlab.PipelineInfo{
@@ -72,7 +72,7 @@ func FailedPipeline(id int, sha string) *gitlab.PipelineInfo {
 }
 
 // RunningPipeline returns a running GitLab pipeline for testing.
-func RunningPipeline(id int, sha string) *gitlab.PipelineInfo {
+func RunningPipeline(id int64, sha string) *gitlab.PipelineInfo {
 	now := time.Now()
 	return &gitlab.PipelineInfo{
 		ID:        id,
@@ -85,7 +85,7 @@ func RunningPipeline(id int, sha string) *gitlab.PipelineInfo {
 }
 
 // PendingPipeline returns a pending GitLab pipeline for testing.
-func PendingPipeline(id int, sha string) *gitlab.PipelineInfo {
+func PendingPipeline(id int64, sha string) *gitlab.PipelineInfo {
 	now := time.Now()
 	return &gitlab.PipelineInfo{
 		ID:        id,
@@ -98,7 +98,7 @@ func PendingPipeline(id int, sha string) *gitlab.PipelineInfo {
 }
 
 // SuccessfulJob returns a successful GitLab job for testing.
-func SuccessfulJob(id int, name, stage string) *glpkg.Job {
+func SuccessfulJob(id int64, name, stage string) *glpkg.Job {
 	now := time.Now()
 	started := now.Add(1 * time.Minute)
 	finished := started.Add(successfulJobDuration)
@@ -116,7 +116,7 @@ func SuccessfulJob(id int, name, stage string) *glpkg.Job {
 }
 
 // FailedJob returns a failed GitLab job for testing.
-func FailedJob(id int, name, stage string) *glpkg.Job {
+func FailedJob(id int64, name, stage string) *glpkg.Job {
 	now := time.Now()
 	started := now.Add(1 * time.Minute)
 	finished := started.Add(failedJobDuration)
@@ -134,7 +134,7 @@ func FailedJob(id int, name, stage string) *glpkg.Job {
 }
 
 // RunningJob returns a running GitLab job for testing.
-func RunningJob(id int, name, stage string) *glpkg.Job {
+func RunningJob(id int64, name, stage string) *glpkg.Job {
 	now := time.Now()
 	started := now.Add(1 * time.Minute)
 	return &glpkg.Job{
@@ -149,7 +149,7 @@ func RunningJob(id int, name, stage string) *glpkg.Job {
 }
 
 // PendingJob returns a pending GitLab job for testing.
-func PendingJob(id int, name, stage string) *glpkg.Job {
+func PendingJob(id int64, name, stage string) *glpkg.Job {
 	now := time.Now()
 	return &glpkg.Job{
 		ID:        id,
@@ -162,7 +162,7 @@ func PendingJob(id int, name, stage string) *glpkg.Job {
 }
 
 // SkippedJob returns a skipped GitLab job for testing.
-func SkippedJob(id int, name, stage string) *glpkg.Job {
+func SkippedJob(id int64, name, stage string) *glpkg.Job {
 	now := time.Now()
 	return &glpkg.Job{
 		ID:        id,
@@ -185,7 +185,7 @@ func ValidGitLabLabels() []*glpkg.Label {
 }
 
 // BasicMergeRequest returns a GitLab basic merge request for testing.
-func BasicMergeRequest(iid int, sourceBranch, targetBranch string) *gitlab.BasicMergeRequest {
+func BasicMergeRequest(iid int64, sourceBranch, targetBranch string) *gitlab.BasicMergeRequest {
 	return &gitlab.BasicMergeRequest{
 		IID:          iid,
 		Title:        "Test MR " + sourceBranch,

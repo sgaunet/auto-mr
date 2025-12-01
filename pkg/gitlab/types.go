@@ -12,6 +12,7 @@ import (
 const (
 	minURLParts            = 2
 	pipelinePollInterval   = 5 * time.Second
+	spinnerUpdateInterval  = 1 * time.Second
 	maxJobDetailsToDisplay = 3
 	statusSuccess          = "success"
 	statusRunning          = "running"
@@ -26,7 +27,7 @@ const (
 type Client struct {
 	client       *gitlab.Client
 	projectID    string
-	mrIID        int
+	mrIID        int64
 	mrSHA        string
 	log          *bullets.Logger
 	updatableLog *bullets.UpdatableLogger
@@ -40,7 +41,7 @@ type Label struct {
 
 // Job represents a GitLab pipeline job with detailed status information.
 type Job struct {
-	ID         int
+	ID         int64
 	Name       string
 	Status     string
 	Stage      string
@@ -54,7 +55,7 @@ type Job struct {
 // jobTracker tracks jobs and their display handles/spinners with thread-safe access.
 type jobTracker struct {
 	mu       sync.RWMutex
-	jobs     map[int]*Job
-	handles  map[int]*bullets.BulletHandle
-	spinners map[int]*bullets.Spinner
+	jobs     map[int64]*Job
+	handles  map[int64]*bullets.BulletHandle
+	spinners map[int64]*bullets.Spinner
 }

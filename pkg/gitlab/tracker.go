@@ -2,6 +2,7 @@ package gitlab
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/sgaunet/bullets"
 )
@@ -9,14 +10,14 @@ import (
 // newJobTracker creates a new job tracker with initialized maps.
 func newJobTracker() *jobTracker {
 	return &jobTracker{
-		jobs:     make(map[int]*Job),
-		handles:  make(map[int]*bullets.BulletHandle),
-		spinners: make(map[int]*bullets.Spinner),
+		jobs:     make(map[int64]*Job),
+		handles:  make(map[int64]*bullets.BulletHandle),
+		spinners: make(map[int64]*bullets.Spinner),
 	}
 }
 
 // getJob retrieves a job by ID with read lock.
-func (jt *jobTracker) getJob(id int) (*Job, bool) {
+func (jt *jobTracker) getJob(id int64) (*Job, bool) {
 	jt.mu.RLock()
 	defer jt.mu.RUnlock()
 	job, exists := jt.jobs[id]
@@ -24,14 +25,14 @@ func (jt *jobTracker) getJob(id int) (*Job, bool) {
 }
 
 // setJob stores a job by ID with write lock.
-func (jt *jobTracker) setJob(id int, job *Job) {
+func (jt *jobTracker) setJob(id int64, job *Job) {
 	jt.mu.Lock()
 	defer jt.mu.Unlock()
 	jt.jobs[id] = job
 }
 
 // getHandle retrieves a bullet handle by job ID with read lock.
-func (jt *jobTracker) getHandle(id int) (*bullets.BulletHandle, bool) {
+func (jt *jobTracker) getHandle(id int64) (*bullets.BulletHandle, bool) {
 	jt.mu.RLock()
 	defer jt.mu.RUnlock()
 	handle, exists := jt.handles[id]
@@ -39,14 +40,14 @@ func (jt *jobTracker) getHandle(id int) (*bullets.BulletHandle, bool) {
 }
 
 // setHandle stores a bullet handle for a job ID with write lock.
-func (jt *jobTracker) setHandle(id int, handle *bullets.BulletHandle) {
+func (jt *jobTracker) setHandle(id int64, handle *bullets.BulletHandle) {
 	jt.mu.Lock()
 	defer jt.mu.Unlock()
 	jt.handles[id] = handle
 }
 
 // getSpinner retrieves a spinner by job ID with read lock.
-func (jt *jobTracker) getSpinner(id int) (*bullets.Spinner, bool) {
+func (jt *jobTracker) getSpinner(id int64) (*bullets.Spinner, bool) {
 	jt.mu.RLock()
 	defer jt.mu.RUnlock()
 	spinner, exists := jt.spinners[id]
@@ -54,14 +55,14 @@ func (jt *jobTracker) getSpinner(id int) (*bullets.Spinner, bool) {
 }
 
 // setSpinner stores a spinner for a job ID with write lock.
-func (jt *jobTracker) setSpinner(id int, spinner *bullets.Spinner) {
+func (jt *jobTracker) setSpinner(id int64, spinner *bullets.Spinner) {
 	jt.mu.Lock()
 	defer jt.mu.Unlock()
 	jt.spinners[id] = spinner
 }
 
 // deleteSpinner stops and removes a spinner with write lock.
-func (jt *jobTracker) deleteSpinner(id int) {
+func (jt *jobTracker) deleteSpinner(id int64) {
 	jt.mu.Lock()
 	defer jt.mu.Unlock()
 	if spinner, exists := jt.spinners[id]; exists {
@@ -74,7 +75,7 @@ func (jt *jobTracker) deleteSpinner(id int) {
 // Returns a list of state transition descriptions.
 func (jt *jobTracker) update(newJobs []*Job, logger *bullets.UpdatableLogger) []string {
 	var transitions []string
-	newJobIDs := make(map[int]bool)
+	newJobIDs := make(map[int64]bool)
 
 	for _, newJob := range newJobs {
 		if newJob == nil || newJob.ID == 0 || newJobIDs[newJob.ID] {
@@ -113,9 +114,13 @@ func (jt *jobTracker) handleNewJob(newJob *Job, logger *bullets.UpdatableLogger)
 	jt.setJob(newJob.ID, newJob)
 	statusText := formatJobStatus(newJob)
 
-	if newJob.Status == statusRunning {
+	if newJob.Status == statusRunning || newJob.Status == statusPending {
 		spinner := logger.SpinnerCircle(statusText)
 		jt.setSpinner(newJob.ID, spinner)
+		// Start time update loop for any job with spinner that has started timing
+		if newJob.StartedAt != nil {
+			go jt.updateSpinnerLoop(newJob.ID, spinner)
+		}
 	} else {
 		handle := logger.InfoHandle(statusText)
 		jt.setHandle(newJob.ID, handle)
@@ -148,7 +153,7 @@ func (jt *jobTracker) handleJobDataUpdate(newJob *Job) string {
 }
 
 // detectRemovedJobs detects jobs that have been removed.
-func (jt *jobTracker) detectRemovedJobs(newJobIDs map[int]bool) []string {
+func (jt *jobTracker) detectRemovedJobs(newJobIDs map[int64]bool) []string {
 	var transitions []string
 	jt.mu.RLock()
 	defer jt.mu.RUnlock()
@@ -223,22 +228,33 @@ func (jt *jobTracker) finalizeJobHandle(handle *bullets.BulletHandle, status, st
 	}
 }
 
-// transitionJobToRunning creates a spinner when a job transitions to running state.
-func (jt *jobTracker) transitionJobToRunning(logger *bullets.UpdatableLogger, jobID int, statusText string) {
-	// Stop any existing handle
+// transitionJobToRunning updates or creates a spinner when a job transitions to running state.
+func (jt *jobTracker) transitionJobToRunning(logger *bullets.UpdatableLogger, jobID int64, statusText string) {
+	// Check if spinner already exists
+	if spinner, exists := jt.getSpinner(jobID); exists {
+		// Spinner exists, just update its text (don't recreate!)
+		spinner.UpdateText(statusText)
+		return
+	}
+
+	// Stop any existing handle if present
 	if handle, exists := jt.getHandle(jobID); exists {
 		handle.Update(bullets.InfoLevel, "") // Clear the line
 		jt.mu.Lock()
 		delete(jt.handles, jobID)
 		jt.mu.Unlock()
 	}
-	// Create animated spinner
+
+	// Create new animated spinner (only if doesn't exist)
 	spinner := logger.SpinnerCircle(statusText)
 	jt.setSpinner(jobID, spinner)
+
+	// Start time update loop for this spinner
+	go jt.updateSpinnerLoop(jobID, spinner)
 }
 
 // transitionJobToNonRunning creates a handle when a job transitions from running state.
-func (jt *jobTracker) transitionJobToNonRunning(logger *bullets.UpdatableLogger, jobID int, statusText string) {
+func (jt *jobTracker) transitionJobToNonRunning(logger *bullets.UpdatableLogger, jobID int64, statusText string) {
 	// Stop spinner
 	if spinner, exists := jt.getSpinner(jobID); exists {
 		spinner.Replace(statusText)
@@ -250,13 +266,48 @@ func (jt *jobTracker) transitionJobToNonRunning(logger *bullets.UpdatableLogger,
 }
 
 // updateExistingJobDisplay updates existing display without animation state change.
-func (jt *jobTracker) updateExistingJobDisplay(jobID int, statusText string) {
-	if _, exists := jt.getSpinner(jobID); exists {
-		// Spinner is running, no update needed (animation continues)
+func (jt *jobTracker) updateExistingJobDisplay(jobID int64, statusText string) {
+	// Check for spinner first
+	if spinner, exists := jt.getSpinner(jobID); exists {
+		// Spinner exists, update its text (CHANGED: was early return)
+		spinner.UpdateText(statusText)
 		return
 	}
+
+	// Static handle, update text
 	if handle, exists := jt.getHandle(jobID); exists {
-		// Static handle, update text
 		handle.Update(bullets.InfoLevel, statusText)
+	}
+}
+
+// updateSpinnerLoop continuously updates spinner text with current elapsed time.
+// Runs in a background goroutine for jobs with StartedAt timestamps.
+// Terminates when job completes or spinner is removed.
+func (jt *jobTracker) updateSpinnerLoop(jobID int64, spinner *bullets.Spinner) {
+	ticker := time.NewTicker(spinnerUpdateInterval)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		job, exists := jt.getJob(jobID)
+
+		// Stop if job no longer exists
+		if !exists {
+			break
+		}
+
+		// Stop if job completed (will be finalized by tracker)
+		if job.Status == statusSuccess || job.Status == statusFailed ||
+			job.Status == statusCanceled {
+			break
+		}
+
+		// Stop if spinner was removed (shouldn't happen, but defensive)
+		if _, spinnerExists := jt.getSpinner(jobID); !spinnerExists {
+			break
+		}
+
+		// Update spinner text with fresh duration calculation
+		statusText := formatJobStatus(job)
+		spinner.UpdateText(statusText)
 	}
 }

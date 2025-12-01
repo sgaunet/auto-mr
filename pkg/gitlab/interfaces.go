@@ -35,11 +35,11 @@ type APIClient interface {
 
 	// ApproveMergeRequest approves a merge request.
 	// Returns an error if the approval fails.
-	ApproveMergeRequest(mrIID int) error
+	ApproveMergeRequest(mrIID int64) error
 
 	// MergeMergeRequest merges a merge request with optional squash.
 	// Returns an error if the merge fails.
-	MergeMergeRequest(mrIID int, squash bool, commitTitle string) error
+	MergeMergeRequest(mrIID int64, squash bool, commitTitle string) error
 
 	// GetMergeRequestsByBranch returns all open merge requests for the given source branch.
 	GetMergeRequestsByBranch(sourceBranch string) ([]*gitlab.BasicMergeRequest, error)
@@ -55,28 +55,28 @@ type StateTracker interface {
 
 	// getJob retrieves a job by ID with read lock.
 	// Returns the Job and a boolean indicating if the job exists.
-	getJob(id int) (*Job, bool)
+	getJob(id int64) (*Job, bool)
 
 	// setJob stores a job by ID with write lock.
-	setJob(id int, job *Job)
+	setJob(id int64, job *Job)
 
 	// getHandle retrieves a bullet handle by job ID with read lock.
 	// Returns the handle and a boolean indicating if it exists.
-	getHandle(id int) (*bullets.BulletHandle, bool)
+	getHandle(id int64) (*bullets.BulletHandle, bool)
 
 	// setHandle stores a bullet handle for a job ID with write lock.
-	setHandle(id int, handle *bullets.BulletHandle)
+	setHandle(id int64, handle *bullets.BulletHandle)
 
 	// getSpinner retrieves a spinner by ID with read lock.
 	// Returns the spinner and a boolean indicating if it exists.
-	getSpinner(id int) (*bullets.Spinner, bool)
+	getSpinner(id int64) (*bullets.Spinner, bool)
 
 	// setSpinner stores a spinner for a job ID with write lock.
-	setSpinner(id int, spinner *bullets.Spinner)
+	setSpinner(id int64, spinner *bullets.Spinner)
 
 	// deleteSpinner removes a spinner with write lock.
 	// Stops the animation before deletion.
-	deleteSpinner(id int)
+	deleteSpinner(id int64)
 }
 
 // DisplayRenderer defines the interface for UI rendering operations.
