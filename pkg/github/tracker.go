@@ -2,6 +2,7 @@ package github
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/sgaunet/bullets"
 )
@@ -114,9 +115,13 @@ func (ct *checkTracker) handleNewCheck(newCheck *JobInfo, logger *bullets.Updata
 	ct.setCheck(newCheck.ID, newCheck)
 	statusText := formatJobStatus(newCheck)
 
-	if newCheck.Status == statusInProgress {
+	if newCheck.Status == statusInProgress || newCheck.Status == statusQueued {
 		spinner := logger.SpinnerCircle(statusText)
 		ct.setSpinner(newCheck.ID, spinner)
+		// Start time update loop for any check with spinner that has started timing
+		if newCheck.StartedAt != nil {
+			go ct.updateSpinnerLoop(newCheck.ID, spinner)
+		}
 	} else {
 		handle := logger.InfoHandle(statusText)
 		ct.setHandle(newCheck.ID, handle)
@@ -235,18 +240,29 @@ func (ct *checkTracker) finalizeHandle(handle *bullets.BulletHandle, conclusion,
 	}
 }
 
-// transitionCheckToRunning creates a spinner when a check transitions to running state.
+// transitionCheckToRunning updates or creates a spinner when a check transitions to running state.
 func (ct *checkTracker) transitionCheckToRunning(logger *bullets.UpdatableLogger, checkID int64, statusText string) {
-	// Stop any existing handle
+	// Check if spinner already exists
+	if spinner, exists := ct.getSpinner(checkID); exists {
+		// Spinner exists, just update its text (don't recreate!)
+		spinner.UpdateText(statusText)
+		return
+	}
+
+	// Stop any existing handle if present
 	if handle, exists := ct.getHandle(checkID); exists {
 		handle.Update(bullets.InfoLevel, "") // Clear the line
 		ct.mu.Lock()
 		delete(ct.handles, checkID)
 		ct.mu.Unlock()
 	}
-	// Create animated spinner
+
+	// Create new animated spinner (only if doesn't exist)
 	spinner := logger.SpinnerCircle(statusText)
 	ct.setSpinner(checkID, spinner)
+
+	// Start time update loop for this spinner
+	go ct.updateSpinnerLoop(checkID, spinner)
 }
 
 // transitionCheckToNonRunning creates a handle when a check transitions from running state.
@@ -263,13 +279,47 @@ func (ct *checkTracker) transitionCheckToNonRunning(logger *bullets.UpdatableLog
 
 // updateExistingCheckDisplay updates existing display without animation state change.
 func (ct *checkTracker) updateExistingCheckDisplay(checkID int64, statusText string) {
-	if _, exists := ct.getSpinner(checkID); exists {
-		// Spinner is running, no update needed (animation continues)
+	// Check for spinner first
+	if spinner, exists := ct.getSpinner(checkID); exists {
+		// Spinner exists, update its text (CHANGED: was early return)
+		spinner.UpdateText(statusText)
 		return
 	}
+
+	// Static handle, update text
 	if handle, exists := ct.getHandle(checkID); exists {
-		// Static handle, update text
 		handle.Update(bullets.InfoLevel, statusText)
+	}
+}
+
+// updateSpinnerLoop continuously updates spinner text with current elapsed time.
+// Runs in a background goroutine for checks with StartedAt timestamps.
+// Terminates when check completes or spinner is removed.
+func (ct *checkTracker) updateSpinnerLoop(checkID int64, spinner *bullets.Spinner) {
+	ticker := time.NewTicker(spinnerUpdateInterval)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		check, exists := ct.getCheck(checkID)
+
+		// Stop if check no longer exists
+		if !exists {
+			break
+		}
+
+		// Stop if check completed (will be finalized by tracker)
+		if check.Status == statusCompleted {
+			break
+		}
+
+		// Stop if spinner was removed (shouldn't happen, but defensive)
+		if _, spinnerExists := ct.getSpinner(checkID); !spinnerExists {
+			break
+		}
+
+		// Update spinner text with fresh duration calculation
+		statusText := formatJobStatus(check)
+		spinner.UpdateText(statusText)
 	}
 }
 

@@ -65,7 +65,7 @@ func (c *Client) SetProjectFromURL(url string) error {
 		return fmt.Errorf("failed to get project information: %w", err)
 	}
 
-	c.projectID = strconv.Itoa(project.ID)
+	c.projectID = strconv.FormatInt(project.ID, 10)
 	c.log.Debug("GitLab project set, ID: " + c.projectID)
 	return nil
 }
@@ -134,7 +134,7 @@ func (c *Client) CreateMergeRequest(
 	}
 
 	assigneeID := assigneeUser[0].ID
-	reviewerIDs := []int{reviewerUser[0].ID}
+	reviewerIDs := []int64{reviewerUser[0].ID}
 
 	labelOptions := (*gitlab.LabelOptions)(&labels)
 	createOptions := &gitlab.CreateMergeRequestOptions{
@@ -246,7 +246,7 @@ func (c *Client) WaitForPipeline(timeout time.Duration) (string, error) {
 }
 
 // ApproveMergeRequest approves a merge request.
-func (c *Client) ApproveMergeRequest(mrIID int) error {
+func (c *Client) ApproveMergeRequest(mrIID int64) error {
 	c.log.Debug(fmt.Sprintf("Approving merge request, IID: %d", mrIID))
 
 	_, _, err := c.client.MergeRequestApprovals.ApproveMergeRequest(c.projectID, mrIID, nil)
@@ -258,7 +258,7 @@ func (c *Client) ApproveMergeRequest(mrIID int) error {
 }
 
 // MergeMergeRequest merges a merge request.
-func (c *Client) MergeMergeRequest(mrIID int, squash bool, commitTitle string) error {
+func (c *Client) MergeMergeRequest(mrIID int64, squash bool, commitTitle string) error {
 	c.log.Debug(fmt.Sprintf("Merging merge request, IID: %d", mrIID))
 
 	mergeOptions := &gitlab.AcceptMergeRequestOptions{
@@ -328,7 +328,7 @@ func (c *Client) fetchJobsForPipelines(
 	pipelines []*gitlab.PipelineInfo,
 ) ([]*Job, []*gitlab.PipelineInfo) {
 	type pipelineJobs struct {
-		pipelineID int
+		pipelineID int64
 		jobs       []*Job
 		err        error
 	}
@@ -495,12 +495,12 @@ func (c *Client) hasPipelineRuns() bool {
 }
 
 // fetchPipelineJobs fetches all jobs for a given pipeline with pagination support.
-func (c *Client) fetchPipelineJobs(pipelineID int) ([]*Job, error) {
+func (c *Client) fetchPipelineJobs(pipelineID int64) ([]*Job, error) {
 	c.log.Debug(fmt.Sprintf("Fetching jobs for pipeline %d", pipelineID))
 
 	var allJobs []*Job
-	page := 1
-	perPage := 100
+	var page int64 = 1
+	var perPage int64 = 100
 
 	for {
 		jobs, resp, err := c.client.Jobs.ListPipelineJobs(

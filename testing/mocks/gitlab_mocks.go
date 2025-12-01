@@ -86,7 +86,7 @@ func (m *GitLabAPIClient) WaitForPipeline(timeout time.Duration) (string, error)
 }
 
 // ApproveMergeRequest implements gitlab.APIClient.
-func (m *GitLabAPIClient) ApproveMergeRequest(mrIID int) error {
+func (m *GitLabAPIClient) ApproveMergeRequest(mrIID int64) error {
 	m.trackCall("ApproveMergeRequest", map[string]any{
 		"mrIID": mrIID,
 	})
@@ -94,7 +94,7 @@ func (m *GitLabAPIClient) ApproveMergeRequest(mrIID int) error {
 }
 
 // MergeMergeRequest implements gitlab.APIClient.
-func (m *GitLabAPIClient) MergeMergeRequest(mrIID int, squash bool, commitTitle string) error {
+func (m *GitLabAPIClient) MergeMergeRequest(mrIID int64, squash bool, commitTitle string) error {
 	m.trackCall("MergeMergeRequest", map[string]any{
 		"mrIID":       mrIID,
 		"squash":      squash,
