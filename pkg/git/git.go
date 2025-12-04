@@ -23,12 +23,13 @@ import (
 )
 
 var (
-	errMainBranchNotFound   = errors.New("could not determine main branch")
-	errHEADNotBranch        = errors.New("HEAD is not pointing to a branch")
-	errNoRemoteURLs         = errors.New("no URLs found for origin remote")
-	errUnsupportedPlatform  = errors.New("repository is not hosted on GitLab or GitHub")
-	errStopIteration        = errors.New("stop iteration")
-	errNoSSHKeys            = errors.New("no SSH keys found in ~/.ssh")
+	errMainBranchNotFound  = errors.New("could not determine main branch")
+	errHEADNotBranch       = errors.New("HEAD is not pointing to a branch")
+	errNoRemoteURLs        = errors.New("no URLs found for origin remote")
+	errUnsupportedPlatform = errors.New("repository is not hosted on GitLab or GitHub")
+	errStopIteration       = errors.New("stop iteration")
+	errNoSSHKeys           = errors.New("no SSH keys found in ~/.ssh")
+	errNotGitRepository    = errors.New("not a git repository (or any parent up to mount point)")
 )
 
 // noAuthMethod represents no authentication (returns nil).
@@ -44,9 +45,10 @@ type authMethod struct {
 
 // Repository wraps a go-git repository with additional functionality.
 type Repository struct {
-	repo *git.Repository
-	auth transport.AuthMethod
-	log  *bullets.Logger
+	repo    *git.Repository
+	gitRoot string // absolute path to git repository root
+	auth    transport.AuthMethod
+	log     *bullets.Logger
 }
 
 // Platform represents a git hosting platform.
@@ -59,15 +61,57 @@ const (
 	PlatformGitHub Platform = "github"
 )
 
+// findGitRoot searches for the git repository root starting from the given path.
+// It searches upward through parent directories until it finds .git or reaches filesystem root.
+// Returns the absolute path to the git repository root or an error if not found.
+func findGitRoot(startPath string) (string, error) {
+	// Convert to absolute path
+	absPath, err := filepath.Abs(startPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to get absolute path: %w", err)
+	}
+
+	currentPath := absPath
+	for {
+		// Check if .git exists (directory or file for worktrees)
+		gitPath := filepath.Join(currentPath, ".git")
+		if _, err := os.Stat(gitPath); err == nil {
+			return currentPath, nil
+		}
+
+		// Move to parent directory
+		parentPath := filepath.Dir(currentPath)
+
+		// Check if we've reached the filesystem root
+		if parentPath == currentPath {
+			return "", errNotGitRepository
+		}
+
+		currentPath = parentPath
+	}
+}
+
 // OpenRepository opens a git repository at the given path.
 func OpenRepository(path string) (*Repository, error) {
 	noLog := logger.NoLogger()
-	repo, err := git.PlainOpen(path)
+
+	// Find git repository root
+	gitRoot, err := findGitRoot(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to locate git repository: %w", err)
+	}
+
+	// Open repository using found root
+	repo, err := git.PlainOpen(gitRoot)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open git repository: %w", err)
 	}
 
-	r := &Repository{repo: repo, log: noLog}
+	r := &Repository{
+		repo:    repo,
+		gitRoot: gitRoot,
+		log:     noLog,
+	}
 	auth, err := getAuth(repo, noLog)
 	if err != nil {
 		return nil, fmt.Errorf("failed to setup authentication: %w", err)
@@ -310,6 +354,7 @@ func (r *Repository) SwitchBranch(branchName string) error {
 	// This preserves untracked files and fails on conflicts (desired behavior)
 	ctx := context.Background()
 	cmd := exec.CommandContext(ctx, "git", "switch", branchName)
+	cmd.Dir = r.gitRoot // Set working directory to git root
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to switch branch: %w\nOutput: %s", err, string(output))
@@ -326,6 +371,7 @@ func (r *Repository) Pull() error {
 	// Use native git pull command to match shell script behavior
 	ctx := context.Background()
 	cmd := exec.CommandContext(ctx, "git", "pull")
+	cmd.Dir = r.gitRoot // Set working directory to git root
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to pull: %w\nOutput: %s", err, string(output))
@@ -342,6 +388,7 @@ func (r *Repository) DeleteBranch(branchName string) error {
 	// Use native git branch -D to force delete (matching shell script behavior)
 	ctx := context.Background()
 	cmd := exec.CommandContext(ctx, "git", "branch", "-D", branchName)
+	cmd.Dir = r.gitRoot // Set working directory to git root
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to delete branch: %w\nOutput: %s", err, string(output))
@@ -358,6 +405,7 @@ func (r *Repository) FetchAndPrune() error {
 	// Use native git fetch --prune to match shell script behavior
 	ctx := context.Background()
 	cmd := exec.CommandContext(ctx, "git", "fetch", "--prune")
+	cmd.Dir = r.gitRoot // Set working directory to git root
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to fetch and prune: %w\nOutput: %s", err, string(output))
