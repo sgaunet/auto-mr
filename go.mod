@@ -7,7 +7,7 @@ require (
 	github.com/go-git/go-git/v5 v5.16.4
 	github.com/google/go-github/v69 v69.2.0
 	github.com/sgaunet/bullets v0.4.0
-	github.com/spf13/cobra v1.10.1
+	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.11.1
 	gitlab.com/gitlab-org/api/client-go v1.3.0
 	golang.org/x/crypto v0.45.0
