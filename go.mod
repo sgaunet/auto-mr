@@ -9,7 +9,7 @@ require (
 	github.com/sgaunet/bullets v0.4.0
 	github.com/spf13/cobra v1.10.1
 	github.com/stretchr/testify v1.11.1
-	gitlab.com/gitlab-org/api/client-go v1.3.0
+	gitlab.com/gitlab-org/api/client-go v1.10.0
 	golang.org/x/crypto v0.45.0
 	golang.org/x/oauth2 v0.33.0
 	gopkg.in/yaml.v3 v3.0.1
