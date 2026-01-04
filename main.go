@@ -38,7 +38,7 @@ var (
 var (
 	logLevel    string
 	showVersion bool
-	squash      bool
+	noSquash    bool
 	msg         string
 	log         *bullets.Logger
 )
@@ -67,8 +67,8 @@ func init() {
 	rootCmd.PersistentFlags().StringVarP(&logLevel, "log-level", "l", "info",
 		"Set log level (debug, info, warn, error)")
 	rootCmd.Flags().BoolVarP(&showVersion, "version", "v", false, "Print version and exit")
-	rootCmd.Flags().BoolVar(&squash, "squash", false,
-		"Squash commits when merging (default: false, preserves commit history)")
+	rootCmd.Flags().BoolVar(&noSquash, "no-squash", false,
+		"Disable squash merge and preserve commit history (default: false, squashes commits)")
 	rootCmd.Flags().StringVar(&msg, "msg", "",
 		"Custom message for MR/PR (overrides commit message selection)")
 }
@@ -254,12 +254,12 @@ func handleGitLab(cfg *config.Config, currentBranch, mainBranch, title, body str
 		return err
 	}
 
-	mr, err := createGitLabMR(client, cfg, currentBranch, mainBranch, title, body, selectedLabels, squash)
+	mr, err := createGitLabMR(client, cfg, currentBranch, mainBranch, title, body, selectedLabels, !noSquash)
 	if err != nil {
 		return err
 	}
 
-	if err := waitAndMergeGitLabMR(client, mr, squash, title); err != nil {
+	if err := waitAndMergeGitLabMR(client, mr, !noSquash, title); err != nil {
 		return err
 	}
 
@@ -388,7 +388,7 @@ func handleGitHub(cfg *config.Config, currentBranch, mainBranch, title, body str
 		return err
 	}
 
-	if err := waitAndMergeGitHubPR(client, pr, title, squash); err != nil {
+	if err := waitAndMergeGitHubPR(client, pr, title, !noSquash); err != nil {
 		return err
 	}
 
