@@ -19,6 +19,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/transport/ssh"
 	"github.com/sgaunet/auto-mr/internal/logger"
 	"github.com/sgaunet/bullets"
+	gossh "golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
 )
 
@@ -189,23 +190,47 @@ func getHTTPSAuth(url string, logger *bullets.Logger) (*authMethod, error) {
 }
 
 // setupSSHAuth configures SSH authentication using the user's SSH keys.
+// It tries SSH agent first (which handles passphrase-protected keys),
+// then falls back to reading key files directly.
 func setupSSHAuth(logger *bullets.Logger) (*authMethod, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get home directory: %w", err)
 	}
 
-	// Try common SSH key files
+	// Setup known_hosts callback for both agent and file-based auth
+	var hostKeyCallback gossh.HostKeyCallback
+	knownHostsPath := filepath.Join(homeDir, ".ssh", "known_hosts")
+	if _, err := os.Stat(knownHostsPath); err == nil {
+		callback, err := knownhosts.New(knownHostsPath)
+		if err == nil {
+			hostKeyCallback = callback
+		}
+	}
+
+	// Priority 1: Try SSH agent first (handles passphrase-protected keys)
+	logger.Debug("Trying SSH agent authentication")
+	sshAgentAuth, err := ssh.NewSSHAgentAuth("git")
+	if err == nil {
+		if hostKeyCallback != nil {
+			sshAgentAuth.HostKeyCallback = hostKeyCallback
+		}
+		logger.Debug("SSH agent authentication configured successfully")
+		return &authMethod{method: sshAgentAuth}, nil
+	}
+	logger.Debug(fmt.Sprintf("SSH agent not available: %v", err))
+
+	// Priority 2: Fall back to reading key files directly
 	keyFiles := []string{
-		filepath.Join(homeDir, ".ssh", "id_rsa"),
 		filepath.Join(homeDir, ".ssh", "id_ed25519"),
+		filepath.Join(homeDir, ".ssh", "id_rsa"),
 		filepath.Join(homeDir, ".ssh", "id_ecdsa"),
 	}
 
 	var sshAuth *ssh.PublicKeys
 	for _, keyFile := range keyFiles {
 		if _, err := os.Stat(keyFile); err == nil {
-			logger.Debug("Trying SSH key: " + keyFile)
+			logger.Debug("Trying SSH key file: " + keyFile)
 			// #nosec G304 - Reading SSH keys from standard locations is intentional
 			sshAuth, err = ssh.NewPublicKeysFromFile("git", keyFile, "")
 			if err != nil {
@@ -214,16 +239,11 @@ func setupSSHAuth(logger *bullets.Logger) (*authMethod, error) {
 				continue
 			}
 
-			// Setup known_hosts callback
-			knownHostsPath := filepath.Join(homeDir, ".ssh", "known_hosts")
-			if _, err := os.Stat(knownHostsPath); err == nil {
-				callback, err := knownhosts.New(knownHostsPath)
-				if err == nil {
-					sshAuth.HostKeyCallback = callback
-				}
+			if hostKeyCallback != nil {
+				sshAuth.HostKeyCallback = hostKeyCallback
 			}
 
-			logger.Debug("SSH authentication configured with key: " + keyFile)
+			logger.Debug("SSH authentication configured with key file: " + keyFile)
 			return &authMethod{method: sshAuth}, nil
 		}
 	}
