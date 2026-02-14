@@ -33,6 +33,9 @@ var (
 	errUnsupportedPlatform = errors.New("unsupported platform")
 	errPipelineFailed      = errors.New("pipeline failed")
 	errWorkflowFailed      = errors.New("workflow failed")
+	errTooManyLabels       = errors.New("too many labels specified")
+	errUnsupportedLabelType = errors.New("unsupported label type")
+	errLabelNotFound       = errors.New("label not found in repository")
 )
 
 var (
@@ -268,54 +271,60 @@ func handleListLabels(platform git.Platform, repo *git.Repository) error {
 
 	switch platform {
 	case git.PlatformGitLab:
-		client, err := gitlab.NewClient()
-		if err != nil {
-			return fmt.Errorf("failed to create GitLab client: %w", err)
-		}
-		client.SetLogger(log)
-
-		if err := client.SetProjectFromURL(remoteURL); err != nil {
-			return fmt.Errorf("failed to set GitLab project: %w", err)
-		}
-
-		labels, err := client.ListLabels()
-		if err != nil {
-			return fmt.Errorf("failed to list labels: %w", err)
-		}
-
-		fmt.Printf("Available labels for GitLab:%s:\n", remoteURL)
-		for _, label := range labels {
-			fmt.Printf("- %s\n", label.Name)
-		}
-		fmt.Printf("\nTotal: %d labels\n", len(labels))
-		return nil
-
+		return listGitLabLabels(remoteURL)
 	case git.PlatformGitHub:
-		client, err := ghclient.NewClient()
-		if err != nil {
-			return fmt.Errorf("failed to create GitHub client: %w", err)
-		}
-		client.SetLogger(log)
-
-		if err := client.SetRepositoryFromURL(remoteURL); err != nil {
-			return fmt.Errorf("failed to set GitHub repository: %w", err)
-		}
-
-		labels, err := client.ListLabels()
-		if err != nil {
-			return fmt.Errorf("failed to list labels: %w", err)
-		}
-
-		fmt.Printf("Available labels for GitHub:%s:\n", remoteURL)
-		for _, label := range labels {
-			fmt.Printf("- %s\n", label.Name)
-		}
-		fmt.Printf("\nTotal: %d labels\n", len(labels))
-		return nil
-
+		return listGitHubLabels(remoteURL)
 	default:
 		return fmt.Errorf("%w: %s", errUnsupportedPlatform, platform)
 	}
+}
+
+func listGitLabLabels(remoteURL string) error {
+	client, err := gitlab.NewClient()
+	if err != nil {
+		return fmt.Errorf("failed to create GitLab client: %w", err)
+	}
+	client.SetLogger(log)
+
+	if err := client.SetProjectFromURL(remoteURL); err != nil {
+		return fmt.Errorf("failed to set GitLab project: %w", err)
+	}
+
+	labels, err := client.ListLabels()
+	if err != nil {
+		return fmt.Errorf("failed to list labels: %w", err)
+	}
+
+	fmt.Printf("Available labels for GitLab:%s:\n", remoteURL)
+	for _, label := range labels {
+		fmt.Printf("- %s\n", label.Name)
+	}
+	fmt.Printf("\nTotal: %d labels\n", len(labels))
+	return nil
+}
+
+func listGitHubLabels(remoteURL string) error {
+	client, err := ghclient.NewClient()
+	if err != nil {
+		return fmt.Errorf("failed to create GitHub client: %w", err)
+	}
+	client.SetLogger(log)
+
+	if err := client.SetRepositoryFromURL(remoteURL); err != nil {
+		return fmt.Errorf("failed to set GitHub repository: %w", err)
+	}
+
+	labels, err := client.ListLabels()
+	if err != nil {
+		return fmt.Errorf("failed to list labels: %w", err)
+	}
+
+	fmt.Printf("Available labels for GitHub:%s:\n", remoteURL)
+	for _, label := range labels {
+		fmt.Printf("- %s\n", label.Name)
+	}
+	fmt.Printf("\nTotal: %d labels\n", len(labels))
+	return nil
 }
 
 func validateManualLabels(availableLabels any, requestedLabels string) ([]string, error) {
@@ -324,7 +333,31 @@ func validateManualLabels(availableLabels any, requestedLabels string) ([]string
 		return []string{}, nil
 	}
 
-	// Parse comma-separated string into slice
+	// Parse and clean labels
+	cleanedLabels := parseLabels(requestedLabels)
+
+	// Validate max selection limit
+	if len(cleanedLabels) > maxLabelsToSelect {
+		return nil, fmt.Errorf("%w: %d (max: %d)", errTooManyLabels, len(cleanedLabels), maxLabelsToSelect)
+	}
+
+	// Build map of available labels for O(1) lookup
+	availableMap, err := buildLabelMap(availableLabels)
+	if err != nil {
+		return nil, err
+	}
+
+	// Check each requested label exists
+	for _, label := range cleanedLabels {
+		if !availableMap[label] {
+			return nil, fmt.Errorf("%w: '%s'. Use --list-labels to see available labels", errLabelNotFound, label)
+		}
+	}
+
+	return cleanedLabels, nil
+}
+
+func parseLabels(requestedLabels string) []string {
 	parts := strings.Split(requestedLabels, ",")
 	var cleanedLabels []string
 	for _, part := range parts {
@@ -333,13 +366,10 @@ func validateManualLabels(availableLabels any, requestedLabels string) ([]string
 			cleanedLabels = append(cleanedLabels, trimmed)
 		}
 	}
+	return cleanedLabels
+}
 
-	// Validate max selection limit
-	if len(cleanedLabels) > maxLabelsToSelect {
-		return nil, fmt.Errorf("too many labels specified: %d (max: %d)", len(cleanedLabels), maxLabelsToSelect)
-	}
-
-	// Build map of available labels for O(1) lookup
+func buildLabelMap(availableLabels any) (map[string]bool, error) {
 	availableMap := make(map[string]bool)
 	switch labels := availableLabels.(type) {
 	case []gitlab.Label:
@@ -351,17 +381,9 @@ func validateManualLabels(availableLabels any, requestedLabels string) ([]string
 			availableMap[label.Name] = true
 		}
 	default:
-		return nil, fmt.Errorf("unsupported label type")
+		return nil, errUnsupportedLabelType
 	}
-
-	// Check each requested label exists
-	for _, label := range cleanedLabels {
-		if !availableMap[label] {
-			return nil, fmt.Errorf("label '%s' not found in repository. Use --list-labels to see available labels", label)
-		}
-	}
-
-	return cleanedLabels, nil
+	return availableMap, nil
 }
 
 func handleGitLab(
