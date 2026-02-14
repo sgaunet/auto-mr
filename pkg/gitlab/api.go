@@ -151,6 +151,13 @@ func (c *Client) CreateMergeRequest(
 
 	mr, _, err := c.client.MergeRequests.CreateMergeRequest(c.projectID, createOptions)
 	if err != nil {
+		// Check if error indicates MR already exists
+		errMsg := strings.ToLower(err.Error())
+		if strings.Contains(errMsg, "already exists") ||
+			strings.Contains(errMsg, "another open merge request already exists") {
+			return nil, fmt.Errorf("%w: source=%s, target=%s: %w",
+				errMRAlreadyExists, sourceBranch, targetBranch, err)
+		}
 		return nil, fmt.Errorf("failed to create merge request: %w", err)
 	}
 

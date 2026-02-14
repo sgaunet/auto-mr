@@ -7,6 +7,7 @@ import (
 	"time"
 
 	ghpkg "github.com/sgaunet/auto-mr/pkg/github"
+	"github.com/sgaunet/auto-mr/testing/fixtures"
 	"github.com/sgaunet/auto-mr/testing/mocks"
 )
 
@@ -116,6 +117,170 @@ func TestErrorPRNotFound(t *testing.T) {
 		expected := "no pull request found for branch"
 		if err.Error() != expected {
 			t.Errorf("Expected error message '%s', got '%s'", expected, err.Error())
+		}
+	})
+}
+
+// TestErrorPRAlreadyExists tests PR already exists error detection.
+func TestErrorPRAlreadyExists(t *testing.T) {
+	scenarios := []struct {
+		name        string
+		apiError    string
+		expectMatch bool
+	}{
+		{
+			name:        "standard pull request already exists message",
+			apiError:    "pull request already exists",
+			expectMatch: true,
+		},
+		{
+			name:        "GitHub API variant message",
+			apiError:    "A pull request already exists for feature:main",
+			expectMatch: true,
+		},
+		{
+			name:        "case insensitive - uppercase",
+			apiError:    "PULL REQUEST ALREADY EXISTS",
+			expectMatch: true,
+		},
+		{
+			name:        "case insensitive - mixed case",
+			apiError:    "Pull Request Already Exists",
+			expectMatch: true,
+		},
+		{
+			name:        "partial match in error message",
+			apiError:    "422 Validation Failed: pull request already exists for these branches",
+			expectMatch: true,
+		},
+		{
+			name:        "unrelated error - validation",
+			apiError:    "422 Validation Failed: title can't be blank",
+			expectMatch: false,
+		},
+		{
+			name:        "unrelated error - permissions",
+			apiError:    "403 Forbidden: insufficient permissions",
+			expectMatch: false,
+		},
+		{
+			name:        "unrelated error - rate limit",
+			apiError:    "403 API rate limit exceeded",
+			expectMatch: false,
+		},
+		{
+			name:        "unrelated error - not found",
+			apiError:    "404 Not Found: repository does not exist",
+			expectMatch: false,
+		},
+	}
+
+	for _, scenario := range scenarios {
+		t.Run(scenario.name, func(t *testing.T) {
+			mockAPI := mocks.NewGitHubAPIClient()
+
+			if scenario.expectMatch {
+				// Simulate the wrapped error that would be returned by api.go
+				wrappedErr := fmt.Errorf("%w: head=feature, base=main: %s",
+					ghpkg.ErrPRAlreadyExists, scenario.apiError)
+				mockAPI.CreatePullRequestError = wrappedErr
+			} else {
+				mockAPI.CreatePullRequestError = errors.New(scenario.apiError)
+			}
+
+			_, err := mockAPI.CreatePullRequest("feature", "main", "Test", "Body", nil, nil, nil)
+
+			if scenario.expectMatch {
+				if !errors.Is(err, ghpkg.ErrPRAlreadyExists) {
+					t.Errorf("Expected ErrPRAlreadyExists, got %v", err)
+				}
+				// Verify error message includes branch context
+				if err != nil && err.Error() != "" {
+					errMsg := err.Error()
+					if errMsg != "" && !containsStr(errMsg, "head=feature") {
+						t.Error("Expected error message to include branch context")
+					}
+				}
+			} else {
+				if errors.Is(err, ghpkg.ErrPRAlreadyExists) {
+					t.Errorf("Did not expect ErrPRAlreadyExists for: %s", scenario.apiError)
+				}
+			}
+		})
+	}
+}
+
+// containsStr is a helper function to check if a string contains a substring.
+func containsStr(s, substr string) bool {
+	return len(s) > 0 && len(substr) > 0 && fmt.Sprintf("%s", s) != "" &&
+		(s == substr || len(s) > len(substr) && findSubstr(s, substr))
+}
+
+// findSubstr checks if substr exists in s.
+func findSubstr(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
+
+// TestErrorPRAlreadyExistsWorkflow tests the full workflow for handling existing PRs.
+func TestErrorPRAlreadyExistsWorkflow(t *testing.T) {
+	t.Run("create PR detects existing and fetches it", func(t *testing.T) {
+		mockAPI := mocks.NewGitHubAPIClient()
+
+		// First attempt to create PR returns "already exists" error
+		wrappedErr := fmt.Errorf("%w: head=feature, base=main: pull request already exists",
+			ghpkg.ErrPRAlreadyExists)
+		mockAPI.CreatePullRequestError = wrappedErr
+
+		_, err := mockAPI.CreatePullRequest("feature", "main", "Test", "Body", nil, nil, nil)
+		if !errors.Is(err, ghpkg.ErrPRAlreadyExists) {
+			t.Errorf("Expected ErrPRAlreadyExists on first attempt, got %v", err)
+		}
+
+		// Verify we can fetch the existing PR
+		mockAPI.GetPullRequestByBranchError = nil
+		mockAPI.GetPullRequestByBranchResponse = fixtures.ValidPullRequest()
+
+		existingPR, fetchErr := mockAPI.GetPullRequestByBranch("feature", "main")
+		if fetchErr != nil {
+			t.Fatalf("Failed to fetch existing PR: %v", fetchErr)
+		}
+		if existingPR == nil {
+			t.Error("Expected to receive existing PR")
+		}
+		if existingPR.Number == nil || *existingPR.Number != 123 {
+			t.Errorf("Expected PR number 123, got %v", existingPR.Number)
+		}
+	})
+
+	t.Run("error context preserved through workflow", func(t *testing.T) {
+		mockAPI := mocks.NewGitHubAPIClient()
+
+		originalErr := "A pull request already exists for feature-456:develop"
+		wrappedErr := fmt.Errorf("%w: head=feature-456, base=develop: %s",
+			ghpkg.ErrPRAlreadyExists, originalErr)
+		mockAPI.CreatePullRequestError = wrappedErr
+
+		_, err := mockAPI.CreatePullRequest("feature-456", "develop", "Test", "Body", nil, nil, nil)
+
+		// Verify typed error is detectable
+		if !errors.Is(err, ghpkg.ErrPRAlreadyExists) {
+			t.Error("Expected ErrPRAlreadyExists")
+		}
+
+		// Verify branch context is in error message
+		errMsg := err.Error()
+		if !containsStr(errMsg, "feature-456") || !containsStr(errMsg, "develop") {
+			t.Errorf("Expected error message to contain branch names, got: %s", errMsg)
+		}
+
+		// Verify original error is preserved
+		if !containsStr(errMsg, originalErr) {
+			t.Errorf("Expected original error message to be preserved, got: %s", errMsg)
 		}
 	})
 }

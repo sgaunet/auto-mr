@@ -8,6 +8,7 @@ var (
 	errInvalidURLFormat = errors.New("invalid GitHub URL format")
 	errWorkflowTimeout  = errors.New("timeout waiting for workflow completion")
 	errPRNotFound       = errors.New("no pull request found for branch")
+	errPRAlreadyExists  = errors.New("pull request already exists for this branch")
 
 	// ErrTokenRequired is returned when GITHUB_TOKEN environment variable is missing.
 	ErrTokenRequired = errTokenRequired
@@ -17,4 +18,6 @@ var (
 	ErrWorkflowTimeout = errWorkflowTimeout
 	// ErrPRNotFound is returned when no pull request is found for the branch.
 	ErrPRNotFound = errPRNotFound
+	// ErrPRAlreadyExists is returned when a pull request already exists for the branch.
+	ErrPRAlreadyExists = errPRAlreadyExists
 )

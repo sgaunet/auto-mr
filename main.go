@@ -478,10 +478,8 @@ func createGitLabMR(
 		cfg.GitLab.Assignee, cfg.GitLab.Reviewer, labels, squash,
 	)
 	if err != nil {
-		// Check if error is about MR already existing
-		errMsg := err.Error()
-		if strings.Contains(errMsg, "already exists") ||
-			strings.Contains(errMsg, "Another open merge request already exists") {
+		// Check if error is about MR already existing using typed error
+		if errors.Is(err, gitlab.ErrMRAlreadyExists) {
 			log.Warnf("Merge request already exists for branch: %s", currentBranch)
 			// Fetch the existing MR
 			existingMR, fetchErr := client.GetMergeRequestByBranch(currentBranch, mainBranch)
@@ -623,8 +621,8 @@ func createGitHubPR(
 		labels,
 	)
 	if err != nil {
-		// Check if error is about PR already existing
-		if strings.Contains(err.Error(), "pull request already exists") {
+		// Check if error is about PR already existing using typed error
+		if errors.Is(err, ghclient.ErrPRAlreadyExists) {
 			log.Warnf("Pull request already exists for branch: %s", currentBranch)
 			// Fetch the existing PR
 			existingPR, fetchErr := client.GetPullRequestByBranch(currentBranch, mainBranch)
