@@ -96,6 +96,12 @@ func (c *Client) CreatePullRequest(
 
 	pr, _, err := c.client.PullRequests.Create(c.ctx(), c.owner, c.repo, newPR)
 	if err != nil {
+		// Check if error indicates PR already exists
+		errMsg := strings.ToLower(err.Error())
+		if strings.Contains(errMsg, "pull request already exists") {
+			return nil, fmt.Errorf("%w: head=%s, base=%s: %w",
+				errPRAlreadyExists, head, base, err)
+		}
 		return nil, fmt.Errorf("failed to create pull request: %w", err)
 	}
 

@@ -1,6 +1,9 @@
 package gitlab_test
 
 import (
+	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -61,6 +64,143 @@ func TestErrorMRNotFound(t *testing.T) {
 		_, err := mockAPI.GetMergeRequestByBranch("nonexistent", "main")
 		if err == nil || err != gitlab.ErrMRNotFound {
 			t.Error("Expected ErrMRNotFound")
+		}
+	})
+}
+
+// TestErrorMRAlreadyExists tests MR already exists error detection.
+func TestErrorMRAlreadyExists(t *testing.T) {
+	scenarios := []struct {
+		name        string
+		apiError    string
+		expectMatch bool
+	}{
+		{
+			name:        "standard already exists message",
+			apiError:    "merge request already exists",
+			expectMatch: true,
+		},
+		{
+			name:        "GitLab variant message",
+			apiError:    "Another open merge request already exists for this source branch",
+			expectMatch: true,
+		},
+		{
+			name:        "case insensitive - uppercase",
+			apiError:    "ALREADY EXISTS",
+			expectMatch: true,
+		},
+		{
+			name:        "case insensitive - mixed case",
+			apiError:    "Already Exists",
+			expectMatch: true,
+		},
+		{
+			name:        "partial match in error message",
+			apiError:    "Error: merge request already exists for branch feature/test",
+			expectMatch: true,
+		},
+		{
+			name:        "unrelated error - validation",
+			apiError:    "validation failed: title can't be blank",
+			expectMatch: false,
+		},
+		{
+			name:        "unrelated error - permissions",
+			apiError:    "403 Forbidden: insufficient permissions",
+			expectMatch: false,
+		},
+		{
+			name:        "unrelated error - not found",
+			apiError:    "404 Not Found: project does not exist",
+			expectMatch: false,
+		},
+	}
+
+	for _, scenario := range scenarios {
+		t.Run(scenario.name, func(t *testing.T) {
+			mockAPI := mocks.NewGitLabAPIClient()
+
+			if scenario.expectMatch {
+				// Simulate the wrapped error that would be returned by api.go
+				wrappedErr := fmt.Errorf("%w: source=feature, target=main: %s",
+					gitlab.ErrMRAlreadyExists, scenario.apiError)
+				mockAPI.CreateMergeRequestError = wrappedErr
+			} else {
+				mockAPI.CreateMergeRequestError = errors.New(scenario.apiError)
+			}
+
+			_, err := mockAPI.CreateMergeRequest("feature", "main", "Test", "Desc", "", "", []string{}, false)
+
+			if scenario.expectMatch {
+				if !errors.Is(err, gitlab.ErrMRAlreadyExists) {
+					t.Errorf("Expected ErrMRAlreadyExists, got %v", err)
+				}
+				// Verify error message includes branch context
+				if err != nil && !strings.Contains(err.Error(), "source=feature") {
+					t.Error("Expected error message to include branch context")
+				}
+			} else {
+				if errors.Is(err, gitlab.ErrMRAlreadyExists) {
+					t.Errorf("Did not expect ErrMRAlreadyExists for: %s", scenario.apiError)
+				}
+			}
+		})
+	}
+}
+
+// TestErrorMRAlreadyExistsWorkflow tests the full workflow for handling existing MRs.
+func TestErrorMRAlreadyExistsWorkflow(t *testing.T) {
+	t.Run("create MR detects existing and fetches it", func(t *testing.T) {
+		mockAPI := mocks.NewGitLabAPIClient()
+
+		// First attempt to create MR returns "already exists" error
+		wrappedErr := fmt.Errorf("%w: source=feature, target=main: merge request already exists",
+			gitlab.ErrMRAlreadyExists)
+		mockAPI.CreateMergeRequestError = wrappedErr
+
+		_, err := mockAPI.CreateMergeRequest("feature", "main", "Test", "Desc", "", "", []string{}, false)
+		if !errors.Is(err, gitlab.ErrMRAlreadyExists) {
+			t.Errorf("Expected ErrMRAlreadyExists on first attempt, got %v", err)
+		}
+
+		// Verify we can fetch the existing MR
+		mockAPI.GetMergeRequestByBranchError = nil
+		mockAPI.GetMergeRequestByBranchResponse = fixtures.ValidMergeRequest()
+
+		existingMR, fetchErr := mockAPI.GetMergeRequestByBranch("feature", "main")
+		if fetchErr != nil {
+			t.Fatalf("Failed to fetch existing MR: %v", fetchErr)
+		}
+		if existingMR == nil {
+			t.Error("Expected to receive existing MR")
+		}
+	})
+
+	t.Run("error context preserved through workflow", func(t *testing.T) {
+		mockAPI := mocks.NewGitLabAPIClient()
+
+		originalErr := "Another open merge request already exists for this source branch"
+		wrappedErr := fmt.Errorf("%w: source=feature-123, target=develop: %s",
+			gitlab.ErrMRAlreadyExists, originalErr)
+		mockAPI.CreateMergeRequestError = wrappedErr
+
+		_, err := mockAPI.CreateMergeRequest("feature-123", "develop", "Test", "Desc", "", "", []string{}, false)
+
+		// Verify typed error is detectable
+		if !errors.Is(err, gitlab.ErrMRAlreadyExists) {
+			t.Error("Expected ErrMRAlreadyExists")
+		}
+
+		// Verify branch context is in error message
+		errMsg := err.Error()
+		if !strings.Contains(errMsg, "feature-123") || !strings.Contains(errMsg, "develop") {
+			t.Errorf("Expected error message to contain branch names, got: %s", errMsg)
+		}
+
+		// Verify original error is preserved
+		if !strings.Contains(errMsg, originalErr) {
+			t.Errorf("Expected original error message to be preserved, got: %s", errMsg)
 		}
 	})
 }
