@@ -33,6 +33,9 @@ var (
 	errUnsupportedPlatform = errors.New("unsupported platform")
 	errPipelineFailed      = errors.New("pipeline failed")
 	errWorkflowFailed      = errors.New("workflow failed")
+	errTooManyLabels       = errors.New("too many labels specified")
+	errUnsupportedLabelType = errors.New("unsupported label type")
+	errLabelNotFound       = errors.New("label not found in repository")
 )
 
 var (
@@ -40,6 +43,8 @@ var (
 	showVersion bool
 	noSquash    bool
 	msg         string
+	listLabels  bool   // List available labels and exit
+	labels      string // Comma-separated label names
 	log         *bullets.Logger
 )
 
@@ -51,12 +56,16 @@ var rootCmd = &cobra.Command{
 	Long: `auto-mr automates the process of creating and merging pull/merge requests
 on GitLab and GitHub repositories. It handles pipeline waiting, auto-approval,
 and branch cleanup.`,
-	Run: func(_ *cobra.Command, _ []string) {
+	Run: func(cmd *cobra.Command, _ []string) {
 		if showVersion {
 			fmt.Println(version)
 			os.Exit(0)
 		}
-		if err := runAutoMR(); err != nil {
+		// Determine label selection mode
+		useManualLabels := cmd.Flags().Changed("labels")
+		manualLabelsValue := labels
+
+		if err := runAutoMR(useManualLabels, manualLabelsValue); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
@@ -71,6 +80,10 @@ func init() {
 		"Disable squash merge and preserve commit history (default: false, squashes commits)")
 	rootCmd.Flags().StringVar(&msg, "msg", "",
 		"Custom message for MR/PR (overrides commit message selection)")
+	rootCmd.Flags().BoolVar(&listLabels, "list-labels", false,
+		"List all available labels and exit")
+	rootCmd.Flags().StringVar(&labels, "labels", "",
+		"Comma-separated label names (e.g., \"bug,enhancement\"). Use empty string to skip labels.")
 }
 
 func main() {
@@ -80,7 +93,7 @@ func main() {
 	}
 }
 
-func runAutoMR() error {
+func runAutoMR(useManualLabels bool, manualLabelsValue string) error {
 	log = logger.NewLogger(logLevel)
 	log.Info("auto-mr starting...")
 
@@ -96,16 +109,21 @@ func runAutoMR() error {
 	}
 	repo.SetLogger(log)
 
-	mainBranch, currentBranch, err := validateBranches(repo)
-	if err != nil {
-		return err
-	}
-
 	platform, err := repo.DetectPlatform()
 	if err != nil {
 		return fmt.Errorf("failed to detect platform: %w", err)
 	}
 	log.Infof("Platform detected: %s", platform)
+
+	// Handle --list-labels flag (list and exit)
+	if listLabels {
+		return handleListLabels(platform, repo)
+	}
+
+	mainBranch, currentBranch, err := validateBranches(repo)
+	if err != nil {
+		return err
+	}
 
 	if err := prepareRepository(repo, currentBranch); err != nil {
 		return err
@@ -116,7 +134,7 @@ func runAutoMR() error {
 		return err
 	}
 
-	return routeToPlatform(platform, cfg, currentBranch, mainBranch, title, body, repo)
+	return routeToPlatform(platform, cfg, currentBranch, mainBranch, title, body, repo, useManualLabels, manualLabelsValue)
 }
 
 func validateBranches(repo *git.Repository) (string, string, error) {
@@ -232,24 +250,155 @@ func routeToPlatform(
 	cfg *config.Config,
 	currentBranch, mainBranch, title, body string,
 	repo *git.Repository,
+	useManualLabels bool,
+	manualLabelsValue string,
 ) error {
 	switch platform {
 	case git.PlatformGitLab:
-		return handleGitLab(cfg, currentBranch, mainBranch, title, body, repo)
+		return handleGitLab(cfg, currentBranch, mainBranch, title, body, repo, useManualLabels, manualLabelsValue)
 	case git.PlatformGitHub:
-		return handleGitHub(cfg, currentBranch, mainBranch, title, body, repo)
+		return handleGitHub(cfg, currentBranch, mainBranch, title, body, repo, useManualLabels, manualLabelsValue)
 	default:
 		return fmt.Errorf("%w: %s", errUnsupportedPlatform, platform)
 	}
 }
 
-func handleGitLab(cfg *config.Config, currentBranch, mainBranch, title, body string, repo *git.Repository) error {
+func handleListLabels(platform git.Platform, repo *git.Repository) error {
+	remoteURL, err := repo.GetRemoteURL("origin")
+	if err != nil {
+		return fmt.Errorf("failed to get remote URL: %w", err)
+	}
+
+	switch platform {
+	case git.PlatformGitLab:
+		return listGitLabLabels(remoteURL)
+	case git.PlatformGitHub:
+		return listGitHubLabels(remoteURL)
+	default:
+		return fmt.Errorf("%w: %s", errUnsupportedPlatform, platform)
+	}
+}
+
+func listGitLabLabels(remoteURL string) error {
+	client, err := gitlab.NewClient()
+	if err != nil {
+		return fmt.Errorf("failed to create GitLab client: %w", err)
+	}
+	client.SetLogger(log)
+
+	if err := client.SetProjectFromURL(remoteURL); err != nil {
+		return fmt.Errorf("failed to set GitLab project: %w", err)
+	}
+
+	labels, err := client.ListLabels()
+	if err != nil {
+		return fmt.Errorf("failed to list labels: %w", err)
+	}
+
+	fmt.Printf("Available labels for GitLab:%s:\n", remoteURL)
+	for _, label := range labels {
+		fmt.Printf("- %s\n", label.Name)
+	}
+	fmt.Printf("\nTotal: %d labels\n", len(labels))
+	return nil
+}
+
+func listGitHubLabels(remoteURL string) error {
+	client, err := ghclient.NewClient()
+	if err != nil {
+		return fmt.Errorf("failed to create GitHub client: %w", err)
+	}
+	client.SetLogger(log)
+
+	if err := client.SetRepositoryFromURL(remoteURL); err != nil {
+		return fmt.Errorf("failed to set GitHub repository: %w", err)
+	}
+
+	labels, err := client.ListLabels()
+	if err != nil {
+		return fmt.Errorf("failed to list labels: %w", err)
+	}
+
+	fmt.Printf("Available labels for GitHub:%s:\n", remoteURL)
+	for _, label := range labels {
+		fmt.Printf("- %s\n", label.Name)
+	}
+	fmt.Printf("\nTotal: %d labels\n", len(labels))
+	return nil
+}
+
+func validateManualLabels(availableLabels any, requestedLabels string) ([]string, error) {
+	// Handle empty string case (skip labels)
+	if requestedLabels == "" {
+		return []string{}, nil
+	}
+
+	// Parse and clean labels
+	cleanedLabels := parseLabels(requestedLabels)
+
+	// Validate max selection limit
+	if len(cleanedLabels) > maxLabelsToSelect {
+		return nil, fmt.Errorf("%w: %d (max: %d)", errTooManyLabels, len(cleanedLabels), maxLabelsToSelect)
+	}
+
+	// Build map of available labels for O(1) lookup
+	availableMap, err := buildLabelMap(availableLabels)
+	if err != nil {
+		return nil, err
+	}
+
+	// Check each requested label exists
+	for _, label := range cleanedLabels {
+		if !availableMap[label] {
+			return nil, fmt.Errorf("%w: '%s'. Use --list-labels to see available labels", errLabelNotFound, label)
+		}
+	}
+
+	return cleanedLabels, nil
+}
+
+func parseLabels(requestedLabels string) []string {
+	parts := strings.Split(requestedLabels, ",")
+	var cleanedLabels []string
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed != "" {
+			cleanedLabels = append(cleanedLabels, trimmed)
+		}
+	}
+	return cleanedLabels
+}
+
+func buildLabelMap(availableLabels any) (map[string]bool, error) {
+	availableMap := make(map[string]bool)
+	switch labels := availableLabels.(type) {
+	case []gitlab.Label:
+		for _, label := range labels {
+			availableMap[label.Name] = true
+		}
+	case []ghclient.Label:
+		for _, label := range labels {
+			availableMap[label.Name] = true
+		}
+	default:
+		return nil, errUnsupportedLabelType
+	}
+	return availableMap, nil
+}
+
+func handleGitLab(
+	cfg *config.Config,
+	currentBranch, mainBranch, title, body string,
+	repo *git.Repository,
+	useManualLabels bool,
+	manualLabelsValue string,
+) error {
 	client, err := initializeGitLabClient(repo)
 	if err != nil {
 		return err
 	}
 
-	selectedLabels, err := selectGitLabLabels(client)
+	selectedLabels, err := selectGitLabLabels(client, useManualLabels, manualLabelsValue)
 	if err != nil {
 		return err
 	}
@@ -285,16 +434,25 @@ func initializeGitLabClient(repo *git.Repository) (*gitlab.Client, error) {
 	return client, nil
 }
 
-func selectGitLabLabels(client *gitlab.Client) ([]string, error) {
-	labels, err := client.ListLabels()
+func selectGitLabLabels(client *gitlab.Client, useManualSelection bool, manualLabels string) ([]string, error) {
+	// Fetch available labels from API
+	availableLabels, err := client.ListLabels()
 	if err != nil {
 		return nil, fmt.Errorf("failed to list labels: %w", err)
 	}
 
+	// Check if manual selection via flag (Tier 1)
+	if useManualSelection {
+		log.Debug("Using manual label selection via --labels flag")
+		return validateManualLabels(availableLabels, manualLabels)
+	}
+
+	// Interactive selection (Tier 2 - existing behavior)
+	log.Debug("Using interactive label selection")
 	labelSelector := ui.NewLabelSelector()
 	labelSelector.SetLogger(log)
-	labelInterfaces := make([]ui.Label, len(labels))
-	for i, label := range labels {
+	labelInterfaces := make([]ui.Label, len(availableLabels))
+	for i, label := range availableLabels {
 		labelInterfaces[i] = &ui.GitLabLabel{Name: label.Name}
 	}
 
@@ -372,13 +530,19 @@ func waitAndMergeGitLabMR(client *gitlab.Client, mr *gogitlab.MergeRequest, squa
 	return nil
 }
 
-func handleGitHub(cfg *config.Config, currentBranch, mainBranch, title, body string, repo *git.Repository) error {
+func handleGitHub(
+	cfg *config.Config,
+	currentBranch, mainBranch, title, body string,
+	repo *git.Repository,
+	useManualLabels bool,
+	manualLabelsValue string,
+) error {
 	client, err := initializeGitHubClient(repo)
 	if err != nil {
 		return err
 	}
 
-	selectedLabels, err := selectGitHubLabels(client)
+	selectedLabels, err := selectGitHubLabels(client, useManualLabels, manualLabelsValue)
 	if err != nil {
 		return err
 	}
@@ -414,16 +578,25 @@ func initializeGitHubClient(repo *git.Repository) (*ghclient.Client, error) {
 	return client, nil
 }
 
-func selectGitHubLabels(client *ghclient.Client) ([]string, error) {
-	labels, err := client.ListLabels()
+func selectGitHubLabels(client *ghclient.Client, useManualSelection bool, manualLabels string) ([]string, error) {
+	// Fetch available labels from API
+	availableLabels, err := client.ListLabels()
 	if err != nil {
 		return nil, fmt.Errorf("failed to list labels: %w", err)
 	}
 
+	// Check if manual selection via flag (Tier 1)
+	if useManualSelection {
+		log.Debug("Using manual label selection via --labels flag")
+		return validateManualLabels(availableLabels, manualLabels)
+	}
+
+	// Interactive selection (Tier 2 - existing behavior)
+	log.Debug("Using interactive label selection")
 	labelSelector := ui.NewLabelSelector()
 	labelSelector.SetLogger(log)
-	labelInterfaces := make([]ui.Label, len(labels))
-	for i, label := range labels {
+	labelInterfaces := make([]ui.Label, len(availableLabels))
+	for i, label := range availableLabels {
 		labelInterfaces[i] = &ui.GitHubLabel{Name: label.Name}
 	}
 
