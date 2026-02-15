@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/sgaunet/auto-mr/internal/logger"
+	"github.com/sgaunet/auto-mr/internal/timeutil"
 	"github.com/sgaunet/bullets"
 	gitlab "gitlab.com/gitlab-org/api/client-go"
 )
@@ -237,10 +238,10 @@ func (c *Client) WaitForPipeline(timeout time.Duration) (string, error) {
 		totalDuration := time.Since(start)
 		if overallStatus == statusSuccess {
 			c.updatableLog.Success("Pipeline completed successfully - total time: " +
-				formatDuration(totalDuration))
+				timeutil.FormatDuration(totalDuration))
 		} else {
 			msg := "Pipeline failed - total time: " +
-				formatDuration(totalDuration)
+				timeutil.FormatDuration(totalDuration)
 			handle := c.updatableLog.InfoHandle(msg)
 			handle.Error(msg)
 		}
@@ -248,7 +249,7 @@ func (c *Client) WaitForPipeline(timeout time.Duration) (string, error) {
 	}
 
 	totalDuration := time.Since(start)
-	c.updatableLog.Error("Timeout after " + formatDuration(totalDuration))
+	c.updatableLog.Error("Timeout after " + timeutil.FormatDuration(totalDuration))
 	return "", errPipelineTimeout
 }
 
