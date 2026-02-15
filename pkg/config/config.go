@@ -6,14 +6,34 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
 
 var (
 	errConfigNotFound        = errors.New("config file not found")
-	errGitLabConfigIncomplete = errors.New("assignee or reviewer is not set for gitlab")
-	errGitHubConfigIncomplete = errors.New("assignee or reviewer is not set for github")
+	errGitLabAssigneeEmpty   = errors.New("gitlab.assignee is required")
+	errGitLabReviewerEmpty   = errors.New("gitlab.reviewer is required")
+	errGitHubAssigneeEmpty   = errors.New("github.assignee is required")
+	errGitHubReviewerEmpty   = errors.New("github.reviewer is required")
+	errGitLabAssigneeInvalid = errors.New("gitlab.assignee contains invalid characters")
+	errGitLabReviewerInvalid = errors.New("gitlab.reviewer contains invalid characters")
+	errGitHubAssigneeInvalid = errors.New("github.assignee contains invalid characters")
+	errGitHubReviewerInvalid = errors.New("github.reviewer contains invalid characters")
+)
+
+// Export for external error checking with errors.Is().
+var (
+	ErrConfigNotFound        = errConfigNotFound
+	ErrGitLabAssigneeEmpty   = errGitLabAssigneeEmpty
+	ErrGitLabReviewerEmpty   = errGitLabReviewerEmpty
+	ErrGitHubAssigneeEmpty   = errGitHubAssigneeEmpty
+	ErrGitHubReviewerEmpty   = errGitHubReviewerEmpty
+	ErrGitLabAssigneeInvalid = errGitLabAssigneeInvalid
+	ErrGitLabReviewerInvalid = errGitLabReviewerInvalid
+	ErrGitHubAssigneeInvalid = errGitHubAssigneeInvalid
+	ErrGitHubReviewerInvalid = errGitHubReviewerInvalid
 )
 
 // Config represents the complete configuration for auto-mr.
@@ -61,15 +81,93 @@ func Load() (*Config, error) {
 	return &config, nil
 }
 
-// Validate checks that all required configuration fields are set.
+// Validate checks that all required configuration fields are set and valid.
+// It trims whitespace from all fields before validation and performs format checks.
 func (c *Config) Validate() error {
-	if c.GitLab.Assignee == "" || c.GitLab.Reviewer == "" {
-		return errGitLabConfigIncomplete
+	// Trim whitespace from all fields before validation
+	c.GitLab.Assignee = strings.TrimSpace(c.GitLab.Assignee)
+	c.GitLab.Reviewer = strings.TrimSpace(c.GitLab.Reviewer)
+	c.GitHub.Assignee = strings.TrimSpace(c.GitHub.Assignee)
+	c.GitHub.Reviewer = strings.TrimSpace(c.GitHub.Reviewer)
+
+	// Validate GitLab configuration
+	if err := validateGitLabConfig(&c.GitLab); err != nil {
+		return err
 	}
 
-	if c.GitHub.Assignee == "" || c.GitHub.Reviewer == "" {
-		return errGitHubConfigIncomplete
+	// Validate GitHub configuration
+	if err := validateGitHubConfig(&c.GitHub); err != nil {
+		return err
 	}
 
 	return nil
+}
+
+// validateGitLabConfig validates GitLab-specific configuration fields.
+func validateGitLabConfig(config *GitLabConfig) error {
+	if config.Assignee == "" {
+		return errGitLabAssigneeEmpty
+	}
+	if !isValidUsername(config.Assignee) {
+		return fmt.Errorf("%w: '%s'", errGitLabAssigneeInvalid, config.Assignee)
+	}
+
+	if config.Reviewer == "" {
+		return errGitLabReviewerEmpty
+	}
+	if !isValidUsername(config.Reviewer) {
+		return fmt.Errorf("%w: '%s'", errGitLabReviewerInvalid, config.Reviewer)
+	}
+
+	return nil
+}
+
+// validateGitHubConfig validates GitHub-specific configuration fields.
+func validateGitHubConfig(config *GitHubConfig) error {
+	if config.Assignee == "" {
+		return errGitHubAssigneeEmpty
+	}
+	if !isValidUsername(config.Assignee) {
+		return fmt.Errorf("%w: '%s'", errGitHubAssigneeInvalid, config.Assignee)
+	}
+
+	if config.Reviewer == "" {
+		return errGitHubReviewerEmpty
+	}
+	if !isValidUsername(config.Reviewer) {
+		return fmt.Errorf("%w: '%s'", errGitHubReviewerInvalid, config.Reviewer)
+	}
+
+	return nil
+}
+
+// isValidUsername validates username format for GitLab and GitHub.
+// Both platforms have similar restrictions:
+// - Alphanumeric characters (a-z, A-Z, 0-9)
+// - Hyphens (-) and underscores (_)
+// - Cannot start or end with special characters
+// - Length: 1-39 characters (conservative, covers both platforms).
+func isValidUsername(username string) bool {
+	if len(username) == 0 || len(username) > 39 {
+		return false
+	}
+
+	// First and last must be alphanumeric
+	if !isAlphanumeric(rune(username[0])) || !isAlphanumeric(rune(username[len(username)-1])) {
+		return false
+	}
+
+	// All characters must be alphanumeric, hyphen, or underscore
+	for _, ch := range username {
+		if !isAlphanumeric(ch) && ch != '-' && ch != '_' {
+			return false
+		}
+	}
+
+	return true
+}
+
+// isAlphanumeric checks if a rune is alphanumeric (a-z, A-Z, 0-9).
+func isAlphanumeric(ch rune) bool {
+	return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9')
 }
