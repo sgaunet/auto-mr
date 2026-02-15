@@ -183,6 +183,58 @@ github:
   assignee: bob-jones
   reviewer: alice-wilson
 `
+
+	validConfigWithTimeout = `
+gitlab:
+  assignee: john-doe
+  reviewer: jane-smith
+  pipeline_timeout: 45m
+github:
+  assignee: bob-jones
+  reviewer: alice-wilson
+  pipeline_timeout: 1h
+`
+
+	configWithInvalidTimeout = `
+gitlab:
+  assignee: john-doe
+  reviewer: jane-smith
+  pipeline_timeout: invalid
+github:
+  assignee: bob-jones
+  reviewer: alice-wilson
+`
+
+	configWithTimeoutTooSmall = `
+gitlab:
+  assignee: john-doe
+  reviewer: jane-smith
+  pipeline_timeout: 30s
+github:
+  assignee: bob-jones
+  reviewer: alice-wilson
+`
+
+	configWithTimeoutTooLarge = `
+gitlab:
+  assignee: john-doe
+  reviewer: jane-smith
+  pipeline_timeout: 9h
+github:
+  assignee: bob-jones
+  reviewer: alice-wilson
+`
+
+	configWithTimeoutWhitespace = `
+gitlab:
+  assignee: john-doe
+  reviewer: jane-smith
+  pipeline_timeout: "  1h30m  "
+github:
+  assignee: bob-jones
+  reviewer: alice-wilson
+  pipeline_timeout: "  45m  "
+`
 )
 
 // setupTestConfig creates a temporary home directory with a config file.
@@ -1056,4 +1108,246 @@ github:
 			t.Error("Expected nil config on validation error")
 		}
 	})
+}
+
+// ========== Timeout Validation Tests ==========
+
+// TestValidatePipelineTimeout tests timeout validation logic.
+func TestValidatePipelineTimeout(t *testing.T) {
+	tests := []struct {
+		name      string
+		timeout   string
+		wantError error
+	}{
+		// Valid timeout formats
+		{"valid 30 minutes", "30m", nil},
+		{"valid 1 hour", "1h", nil},
+		{"valid 1h30m", "1h30m", nil},
+		{"valid 90 minutes", "90m", nil},
+		{"valid 5400 seconds", "5400s", nil},
+		{"valid minimum 1m", "1m", nil},
+		{"valid maximum 8h", "8h", nil},
+		{"valid 480m (8 hours)", "480m", nil},
+		{"valid complex duration", "2h45m30s", nil},
+		{"empty string (uses default)", "", nil},
+
+		// Invalid formats
+		{"invalid no unit", "30", config.ErrInvalidTimeout},
+		{"invalid text", "abc", config.ErrInvalidTimeout},
+		{"invalid negative", "-5m", config.ErrTimeoutTooSmall},
+		{"invalid zero", "0s", config.ErrTimeoutTooSmall},
+		{"invalid 59 seconds", "59s", config.ErrTimeoutTooSmall},
+		{"invalid 9 hours", "9h", config.ErrTimeoutTooLarge},
+		{"invalid 481 minutes", "481m", config.ErrTimeoutTooLarge},
+		{"invalid special chars", "30@m", config.ErrInvalidTimeout},
+		{"invalid spaces in value", "30 m", config.ErrInvalidTimeout},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{
+				GitLab: config.GitLabConfig{
+					Assignee:        "valid",
+					Reviewer:        "valid",
+					PipelineTimeout: tt.timeout,
+				},
+				GitHub: config.GitHubConfig{
+					Assignee: "valid",
+					Reviewer: "valid",
+				},
+			}
+			err := cfg.Validate()
+
+			if tt.wantError != nil {
+				if err == nil {
+					t.Errorf("Expected error %v, got nil", tt.wantError)
+				} else if !errors.Is(err, tt.wantError) {
+					t.Errorf("Expected error %v, got %v", tt.wantError, err)
+				}
+			} else if err != nil {
+				t.Errorf("Unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+// TestLoadWithTimeout tests loading config with timeout fields.
+func TestLoadWithTimeout(t *testing.T) {
+	tests := []struct {
+		name           string
+		configYAML     string
+		expectError    bool
+		errorType      error
+		expectedGLTime string
+		expectedGHTime string
+	}{
+		{
+			name:           "valid timeout values",
+			configYAML:     validConfigWithTimeout,
+			expectError:    false,
+			expectedGLTime: "45m",
+			expectedGHTime: "1h",
+		},
+		{
+			name:        "invalid timeout format",
+			configYAML:  configWithInvalidTimeout,
+			expectError: true,
+			errorType:   config.ErrInvalidTimeout,
+		},
+		{
+			name:        "timeout too small",
+			configYAML:  configWithTimeoutTooSmall,
+			expectError: true,
+			errorType:   config.ErrTimeoutTooSmall,
+		},
+		{
+			name:        "timeout too large",
+			configYAML:  configWithTimeoutTooLarge,
+			expectError: true,
+			errorType:   config.ErrTimeoutTooLarge,
+		},
+		{
+			name:           "timeout with whitespace (trimmed)",
+			configYAML:     configWithTimeoutWhitespace,
+			expectError:    false,
+			expectedGLTime: "1h30m",
+			expectedGHTime: "45m",
+		},
+		{
+			name:        "backward compatibility (no timeout field)",
+			configYAML:  validConfigYAML,
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setupTestConfig(t, tt.configYAML)
+
+			cfg, err := config.Load()
+
+			if tt.expectError {
+				if err == nil {
+					t.Fatal("Expected error, got nil")
+				}
+				if tt.errorType != nil && !errors.Is(err, tt.errorType) {
+					t.Errorf("Expected error type %v, got: %v", tt.errorType, err)
+				}
+				if cfg != nil {
+					t.Error("Expected nil config on error")
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("Expected success, got error: %v", err)
+				}
+				if cfg == nil {
+					t.Fatal("Expected non-nil config")
+				}
+
+				// Verify timeout values if specified
+				if tt.expectedGLTime != "" && cfg.GitLab.PipelineTimeout != tt.expectedGLTime {
+					t.Errorf("GitLab timeout: expected '%s', got '%s'",
+						tt.expectedGLTime, cfg.GitLab.PipelineTimeout)
+				}
+				if tt.expectedGHTime != "" && cfg.GitHub.PipelineTimeout != tt.expectedGHTime {
+					t.Errorf("GitHub timeout: expected '%s', got '%s'",
+						tt.expectedGHTime, cfg.GitHub.PipelineTimeout)
+				}
+			}
+		})
+	}
+}
+
+// TestTimeoutWhitespaceTrimming tests that timeout values are trimmed.
+func TestTimeoutWhitespaceTrimming(t *testing.T) {
+	tests := []struct {
+		name            string
+		gitlabTimeout   string
+		githubTimeout   string
+		expectedGLTrim  string
+		expectedGHTrim  string
+	}{
+		{"leading spaces", "  30m", "  1h", "30m", "1h"},
+		{"trailing spaces", "30m  ", "1h  ", "30m", "1h"},
+		{"both sides spaces", "  30m  ", "  1h  ", "30m", "1h"},
+		{"tabs", "\t45m\t", "\t2h\t", "45m", "2h"},
+		{"mixed whitespace", " \t 1h30m \t ", " \t 45m \t ", "1h30m", "45m"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{
+				GitLab: config.GitLabConfig{
+					Assignee:        "valid",
+					Reviewer:        "valid",
+					PipelineTimeout: tt.gitlabTimeout,
+				},
+				GitHub: config.GitHubConfig{
+					Assignee:        "valid",
+					Reviewer:        "valid",
+					PipelineTimeout: tt.githubTimeout,
+				},
+			}
+			err := cfg.Validate()
+			if err != nil {
+				t.Fatalf("Unexpected validation error: %v", err)
+			}
+
+			// Verify trimming happened
+			if cfg.GitLab.PipelineTimeout != tt.expectedGLTrim {
+				t.Errorf("GitLab timeout not trimmed: expected '%s', got '%s'",
+					tt.expectedGLTrim, cfg.GitLab.PipelineTimeout)
+			}
+			if cfg.GitHub.PipelineTimeout != tt.expectedGHTrim {
+				t.Errorf("GitHub timeout not trimmed: expected '%s', got '%s'",
+					tt.expectedGHTrim, cfg.GitHub.PipelineTimeout)
+			}
+		})
+	}
+}
+
+// TestTimeoutBoundaryValues tests exact boundary conditions.
+func TestTimeoutBoundaryValues(t *testing.T) {
+	tests := []struct {
+		name      string
+		timeout   string
+		wantError error
+	}{
+		// Boundary tests
+		{"exactly 1 minute (minimum)", "1m", nil},
+		{"exactly 8 hours (maximum)", "8h", nil},
+		{"60 seconds (valid, equals 1m)", "60s", nil},
+		{"28800 seconds (valid, equals 8h)", "28800s", nil},
+		{"59 seconds (too small)", "59s", config.ErrTimeoutTooSmall},
+		{"28801 seconds (too large)", "28801s", config.ErrTimeoutTooLarge},
+		{"0 minutes (too small)", "0m", config.ErrTimeoutTooSmall},
+		{"481 minutes (too large)", "481m", config.ErrTimeoutTooLarge},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{
+				GitLab: config.GitLabConfig{
+					Assignee:        "valid",
+					Reviewer:        "valid",
+					PipelineTimeout: tt.timeout,
+				},
+				GitHub: config.GitHubConfig{
+					Assignee: "valid",
+					Reviewer: "valid",
+				},
+			}
+			err := cfg.Validate()
+
+			if tt.wantError != nil {
+				if err == nil {
+					t.Errorf("Expected error %v, got nil", tt.wantError)
+				} else if !errors.Is(err, tt.wantError) {
+					t.Errorf("Expected error %v, got %v", tt.wantError, err)
+				}
+			} else if err != nil {
+				t.Errorf("Unexpected error: %v", err)
+			}
+		})
+	}
 }
