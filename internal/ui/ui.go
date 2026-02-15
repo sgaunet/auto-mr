@@ -1,4 +1,15 @@
-// Package ui provides interactive terminal UI components for label selection.
+// Package ui provides interactive terminal UI components for label selection
+// using the survey library.
+//
+// The package supports platform-agnostic label selection through the [Label] interface,
+// with concrete implementations for GitLab ([GitLabLabel]), GitHub ([GitHubLabel]),
+// and generic ([GenericLabel]) labels.
+//
+// Usage:
+//
+//	selector := ui.NewLabelSelector()
+//	labels := []ui.Label{&ui.GitHubLabel{Name: "bug"}, &ui.GitHubLabel{Name: "feature"}}
+//	selected, err := selector.SelectLabels(labels, 3)
 package ui
 
 import (
@@ -30,6 +41,13 @@ func (ls *LabelSelector) SetLogger(logger *bullets.Logger) {
 }
 
 // SelectLabels presents an interactive multi-select prompt for choosing labels.
+//
+// Parameters:
+//   - labels: available labels to choose from (returns empty slice if empty)
+//   - maxSelection: maximum number of labels the user can select (0 for unlimited)
+//
+// Returns the selected label names as strings.
+// Returns an error if the prompt fails or the user cancels with Ctrl+C.
 func (ls *LabelSelector) SelectLabels(labels []Label, maxSelection int) ([]string, error) {
 	if len(labels) == 0 {
 		ls.log.Debug("No labels available for selection")

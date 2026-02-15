@@ -10,7 +10,8 @@ import (
 	"github.com/sgaunet/bullets"
 )
 
-// GitLabAdapter wraps a GitLab client to implement the Provider interface.
+// GitLabAdapter wraps a GitLab client to implement the [Provider] interface.
+// It translates between the platform-agnostic types and the GitLab-specific API.
 type GitLabAdapter struct {
 	client *gitlab.Client
 	cfg    config.GitLabConfig

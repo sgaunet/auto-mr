@@ -3,6 +3,7 @@ package platform
 import "time"
 
 // Provider defines the unified interface for GitLab and GitHub operations.
+// Implementations are [GitLabAdapter] and [GitHubAdapter], created via [NewProvider].
 type Provider interface {
 	// Initialize sets up the client from a git remote URL.
 	Initialize(remoteURL string) error

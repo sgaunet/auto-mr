@@ -1,4 +1,12 @@
-// Package urlutil provides URL parsing utilities for git remotes.
+// Package urlutil provides URL parsing utilities for extracting path components
+// from git remote URLs.
+//
+// It handles three URL formats:
+//   - HTTPS: https://github.com/owner/repo
+//   - SSH colon: git@github.com:owner/repo
+//   - SSH protocol: ssh://git@github.com/owner/repo
+//
+// The .git suffix should be removed by the caller before calling [ExtractPathComponents].
 package urlutil
 
 import "strings"

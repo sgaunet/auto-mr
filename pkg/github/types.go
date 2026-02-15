@@ -24,7 +24,11 @@ const (
 	conclusionNeutral      = "neutral"
 )
 
-// Client represents a GitHub API client wrapper.
+// Client represents a GitHub API client wrapper that manages pull request
+// lifecycle operations. It stores internal state (owner, repo, prNumber, prSHA)
+// that is set by methods like [Client.SetRepositoryFromURL] and [Client.CreatePullRequest].
+//
+// Not safe for concurrent use.
 type Client struct {
 	client  *github.Client
 	owner   string
@@ -41,14 +45,16 @@ type Label struct {
 }
 
 // JobInfo represents a GitHub workflow job with detailed status information.
+// Status values are: "queued", "in_progress", "completed".
+// Conclusion values (only set when completed): "success", "failure", "cancelled", "skipped", "neutral".
 type JobInfo struct {
-	ID          int64
-	Name        string
-	Status      string
-	Conclusion  string
-	StartedAt   *time.Time
-	CompletedAt *time.Time
-	HTMLURL     string
+	ID          int64      // Unique job ID
+	Name        string     // Job name as defined in workflow YAML
+	Status      string     // Current job status
+	Conclusion  string     // Final conclusion (empty until completed)
+	StartedAt   *time.Time // When the job started (nil if queued)
+	CompletedAt *time.Time // When the job finished (nil if still running)
+	HTMLURL     string     // Browser URL for the job
 }
 
 // checkTracker tracks workflow jobs/checks and their display handles with thread-safe access.

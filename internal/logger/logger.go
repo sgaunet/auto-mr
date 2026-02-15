@@ -1,4 +1,14 @@
-// Package logger provides logging utilities for auto-mr.
+// Package logger provides logging utilities for auto-mr using the bullets library.
+//
+// It wraps [bullets.Logger] with convenience constructors for creating loggers
+// at various levels and a silent logger for use in tests or when no output is desired.
+//
+// Usage:
+//
+//	log := logger.NewLogger("debug")
+//	log.Debug("Starting operation")
+//
+//	silentLog := logger.NoLogger() // Suppresses all output
 package logger
 
 import (
@@ -15,10 +25,10 @@ type Logger interface {
 	Error(msg string, args ...any)
 }
 
-// NewLogger creates a new logger
-// logLevel is the level of logging
-// Possible values of logLevel are: "debug", "info", "warn", "error"
-// Default value is "info".
+// NewLogger creates a new logger that writes to stdout at the specified level.
+//
+// Parameters:
+//   - logLevel: one of "debug", "info", "warn", "error" (defaults to "info" for unknown values)
 func NewLogger(logLevel string) *bullets.Logger {
 	var level bullets.Level
 	switch logLevel {
@@ -38,7 +48,8 @@ func NewLogger(logLevel string) *bullets.Logger {
 	return logger
 }
 
-// NoLogger creates a logger that does not log anything.
+// NoLogger creates a logger that suppresses all output by setting the level to Fatal.
+// Useful for tests and silent operation.
 func NoLogger() *bullets.Logger {
 	logger := bullets.New(os.Stdout)
 	logger.SetLevel(bullets.FatalLevel)

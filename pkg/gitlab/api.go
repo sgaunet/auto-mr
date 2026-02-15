@@ -15,7 +15,10 @@ import (
 	gitlab "gitlab.com/gitlab-org/api/client-go"
 )
 
-// NewClient creates a new GitLab client.
+// NewClient creates a new GitLab client authenticated via the GITLAB_TOKEN environment variable.
+//
+// Returns [ErrTokenRequired] if GITLAB_TOKEN is not set.
+// Returns a wrapped error if the underlying GitLab client creation fails.
 func NewClient() (*Client, error) {
 	token := os.Getenv("GITLAB_TOKEN")
 	if token == "" {
@@ -47,6 +50,14 @@ func (c *Client) SetLogger(logger *bullets.Logger) {
 }
 
 // SetProjectFromURL sets the project from a git remote URL.
+// Supports both HTTPS and SSH URL formats:
+//   - https://gitlab.com/group/project.git
+//   - git@gitlab.com:group/project.git
+//
+// The .git suffix should already be present; it is stripped internally.
+//
+// Returns [ErrInvalidURLFormat] if the URL cannot be parsed.
+// Returns a wrapped error if the project does not exist or the API call fails.
 func (c *Client) SetProjectFromURL(url string) error {
 	// Extract project path from URL
 	// Supports both HTTPS and SSH formats:
@@ -73,6 +84,9 @@ func (c *Client) SetProjectFromURL(url string) error {
 }
 
 // ListLabels returns all labels for the project.
+// [SetProjectFromURL] must be called before this method.
+//
+// Returns an empty slice if no labels are configured.
 func (c *Client) ListLabels() ([]*Label, error) {
 	c.log.Debug("Listing GitLab labels")
 
@@ -91,6 +105,21 @@ func (c *Client) ListLabels() ([]*Label, error) {
 }
 
 // CreateMergeRequest creates a new merge request with assignees, reviewers, and labels.
+// The created MR automatically sets RemoveSourceBranch to true.
+//
+// Parameters:
+//   - sourceBranch: the feature branch name
+//   - targetBranch: the target branch (e.g., "main")
+//   - title: MR title (must not be empty)
+//   - description: MR body/description
+//   - assignee: GitLab username to assign
+//   - reviewer: GitLab username to request review from
+//   - labels: list of label names to apply (may be nil)
+//   - squash: whether to squash commits on merge
+//
+// Returns [ErrMRAlreadyExists] if an MR already exists for the same branches.
+// Returns [ErrAssigneeNotFound] or [ErrReviewerNotFound] if users cannot be found.
+// Stores the MR IID and SHA internally for use by [Client.WaitForPipeline].
 func (c *Client) CreateMergeRequest(
 	sourceBranch, targetBranch, title, description, assignee, reviewer string,
 	labels []string, squash bool,
@@ -146,7 +175,10 @@ func (c *Client) CreateMergeRequest(
 	return mr, nil
 }
 
-// GetMergeRequestByBranch fetches an existing merge request by source and target branches.
+// GetMergeRequestByBranch fetches an existing open merge request by source and target branches.
+// Only the first matching MR is returned. Stores the MR IID and SHA internally.
+//
+// Returns [ErrMRNotFound] if no open MR matches the given branches.
 func (c *Client) GetMergeRequestByBranch(sourceBranch, targetBranch string) (*gitlab.MergeRequest, error) {
 	mrs, _, err := c.client.MergeRequests.ListProjectMergeRequests(c.projectID, &gitlab.ListProjectMergeRequestsOptions{
 		State:        gitlab.Ptr("opened"),
@@ -173,6 +205,16 @@ func (c *Client) GetMergeRequestByBranch(sourceBranch, targetBranch string) (*gi
 }
 
 // WaitForPipeline waits for all pipelines to complete for the merge request.
+// It polls at 5-second intervals and displays real-time job-level progress with animated spinners.
+// If no pipelines are configured, it returns "success" immediately.
+//
+// Parameters:
+//   - timeout: maximum wait duration (typically 1m to 8h)
+//
+// Returns the overall pipeline status ("success", "failed", "canceled").
+// Returns [ErrPipelineTimeout] if the timeout is exceeded.
+//
+// A merge request must have been created or fetched before calling this method.
 func (c *Client) WaitForPipeline(timeout time.Duration) (string, error) {
 	c.log.Debug(fmt.Sprintf("Waiting for pipeline, timeout: %v", timeout))
 	start := time.Now()
@@ -231,7 +273,10 @@ func (c *Client) WaitForPipeline(timeout time.Duration) (string, error) {
 	return "", errPipelineTimeout
 }
 
-// ApproveMergeRequest approves a merge request.
+// ApproveMergeRequest approves a merge request by its internal ID.
+//
+// Parameters:
+//   - mrIID: the merge request internal ID (IID), not the global ID
 func (c *Client) ApproveMergeRequest(mrIID int64) error {
 	c.log.Debug(fmt.Sprintf("Approving merge request, IID: %d", mrIID))
 
@@ -243,7 +288,13 @@ func (c *Client) ApproveMergeRequest(mrIID int64) error {
 	return nil
 }
 
-// MergeMergeRequest merges a merge request.
+// MergeMergeRequest merges a merge request with optional squash.
+// The source branch is automatically removed after merge.
+//
+// Parameters:
+//   - mrIID: the merge request internal ID
+//   - squash: if true, commits are squashed and commitTitle is used as squash commit message
+//   - commitTitle: the merge/squash commit message
 func (c *Client) MergeMergeRequest(mrIID int64, squash bool, commitTitle string) error {
 	c.log.Debug(fmt.Sprintf("Merging merge request, IID: %d", mrIID))
 

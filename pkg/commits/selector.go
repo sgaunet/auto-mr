@@ -5,13 +5,20 @@ import (
 	"log/slog"
 )
 
-// Selector handles commit message selection logic.
+// Selector handles commit message selection logic with support for
+// auto-selection, interactive prompts, and manual override.
+// It delegates UI rendering to a [SelectionRenderer] implementation.
+//
+// Not safe for concurrent use.
 type Selector struct {
 	renderer SelectionRenderer
 	logger   *slog.Logger
 }
 
-// NewSelector creates a new message selector.
+// NewSelector creates a new message selector with the given renderer.
+//
+// Parameters:
+//   - renderer: the UI renderer for interactive selection (must not be nil)
 func NewSelector(renderer SelectionRenderer) *Selector {
 	return &Selector{
 		renderer: renderer,
@@ -25,8 +32,17 @@ func (s *Selector) SetLogger(logger *slog.Logger) {
 }
 
 // GetMessageForMR determines which commit message to use for MR/PR.
-// Handles auto-selection (single commit) and interactive selection (multiple commits).
-// Manual override should be handled before calling this method.
+// It applies the following priority:
+//  1. Manual override: if msgFlagValue is non-empty, it is parsed and returned.
+//  2. Auto-select: if exactly one valid commit exists, it is selected automatically.
+//  3. Interactive: if multiple valid commits exist, the renderer prompts the user.
+//
+// Parameters:
+//   - commits: all commits from the branch (will be filtered internally)
+//   - msgFlagValue: manual message from --msg flag (empty string to skip)
+//
+// Returns [ErrAllCommitsInvalid] if no valid commits exist after filtering.
+// Returns [ErrSelectionCancelled] if the user cancels interactive selection.
 func (s *Selector) GetMessageForMR(commits []Commit, msgFlagValue string) (MessageSelection, error) {
 	// Manual override (should be handled by caller, but check here for safety)
 	if msgFlagValue != "" {
