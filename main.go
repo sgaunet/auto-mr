@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -93,13 +94,60 @@ func main() {
 	}
 }
 
+// formatConfigError provides user-friendly error messages for configuration errors.
+func formatConfigError(err error) error {
+	homeDir, _ := os.UserHomeDir()
+	configPath := filepath.Join(homeDir, ".config", "auto-mr", "config.yml")
+
+	switch {
+	case errors.Is(err, config.ErrConfigNotFound):
+		return fmt.Errorf("%w\n\n"+
+			"Expected location: %s\n"+
+			"Please create a config file with the following structure:\n\n"+
+			"gitlab:\n"+
+			"  assignee: your-gitlab-username\n"+
+			"  reviewer: reviewer-gitlab-username\n"+
+			"github:\n"+
+			"  assignee: your-github-username\n"+
+			"  reviewer: reviewer-github-username",
+			err, configPath)
+
+	case errors.Is(err, config.ErrGitLabAssigneeEmpty):
+		return fmt.Errorf("%w\n\nConfig file: %s\nAdd: gitlab.assignee", err, configPath)
+
+	case errors.Is(err, config.ErrGitLabReviewerEmpty):
+		return fmt.Errorf("%w\n\nConfig file: %s\nAdd: gitlab.reviewer", err, configPath)
+
+	case errors.Is(err, config.ErrGitHubAssigneeEmpty):
+		return fmt.Errorf("%w\n\nConfig file: %s\nAdd: github.assignee", err, configPath)
+
+	case errors.Is(err, config.ErrGitHubReviewerEmpty):
+		return fmt.Errorf("%w\n\nConfig file: %s\nAdd: github.reviewer", err, configPath)
+
+	case errors.Is(err, config.ErrGitLabAssigneeInvalid),
+		errors.Is(err, config.ErrGitLabReviewerInvalid),
+		errors.Is(err, config.ErrGitHubAssigneeInvalid),
+		errors.Is(err, config.ErrGitHubReviewerInvalid):
+		return fmt.Errorf("%w\n\n"+
+			"Config file: %s\n"+
+			"Usernames must:\n"+
+			"  - Contain only letters, numbers, hyphens (-), or underscores (_)\n"+
+			"  - Start and end with a letter or number\n"+
+			"  - Be between 1 and 39 characters long",
+			err, configPath)
+
+	default:
+		return fmt.Errorf("failed to load configuration: %w\n\nConfig file: %s", err, configPath)
+	}
+}
+
 func runAutoMR(useManualLabels bool, manualLabelsValue string) error {
 	log = logger.NewLogger(logLevel)
 	log.Info("auto-mr starting...")
 
 	cfg, err := config.Load()
 	if err != nil {
-		return fmt.Errorf("failed to load configuration: %w", err)
+		return formatConfigError(err)
 	}
 	log.Debug("Configuration loaded successfully")
 
