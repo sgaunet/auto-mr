@@ -7,8 +7,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
+)
+
+const (
+	minPipelineTimeout = 1 * time.Minute
+	maxPipelineTimeout = 8 * time.Hour
 )
 
 var (
@@ -21,7 +27,16 @@ var (
 	errGitLabReviewerInvalid = errors.New("gitlab.reviewer contains invalid characters")
 	errGitHubAssigneeInvalid = errors.New("github.assignee contains invalid characters")
 	errGitHubReviewerInvalid = errors.New("github.reviewer contains invalid characters")
+	errInvalidTimeout        = errors.New("invalid timeout format")
+	errTimeoutTooSmall       = errors.New("timeout too small")
+	errTimeoutTooLarge       = errors.New("timeout too large")
 )
+
+// MinPipelineTimeout is the minimum allowed pipeline timeout (1 minute).
+const MinPipelineTimeout = minPipelineTimeout
+
+// MaxPipelineTimeout is the maximum allowed pipeline timeout (8 hours).
+const MaxPipelineTimeout = maxPipelineTimeout
 
 // Export for external error checking with errors.Is().
 var (
@@ -34,6 +49,9 @@ var (
 	ErrGitLabReviewerInvalid = errGitLabReviewerInvalid
 	ErrGitHubAssigneeInvalid = errGitHubAssigneeInvalid
 	ErrGitHubReviewerInvalid = errGitHubReviewerInvalid
+	ErrInvalidTimeout        = errInvalidTimeout
+	ErrTimeoutTooSmall       = errTimeoutTooSmall
+	ErrTimeoutTooLarge       = errTimeoutTooLarge
 )
 
 // Config represents the complete configuration for auto-mr.
@@ -44,14 +62,16 @@ type Config struct {
 
 // GitLabConfig contains GitLab-specific configuration.
 type GitLabConfig struct {
-	Assignee string `yaml:"assignee"`
-	Reviewer string `yaml:"reviewer"`
+	Assignee        string `yaml:"assignee"`
+	Reviewer        string `yaml:"reviewer"`
+	PipelineTimeout string `yaml:"pipeline_timeout,omitempty"`
 }
 
 // GitHubConfig contains GitHub-specific configuration.
 type GitHubConfig struct {
-	Assignee string `yaml:"assignee"`
-	Reviewer string `yaml:"reviewer"`
+	Assignee        string `yaml:"assignee"`
+	Reviewer        string `yaml:"reviewer"`
+	PipelineTimeout string `yaml:"pipeline_timeout,omitempty"`
 }
 
 // Load reads and parses the configuration file from the user's home directory.
@@ -87,8 +107,10 @@ func (c *Config) Validate() error {
 	// Trim whitespace from all fields before validation
 	c.GitLab.Assignee = strings.TrimSpace(c.GitLab.Assignee)
 	c.GitLab.Reviewer = strings.TrimSpace(c.GitLab.Reviewer)
+	c.GitLab.PipelineTimeout = strings.TrimSpace(c.GitLab.PipelineTimeout)
 	c.GitHub.Assignee = strings.TrimSpace(c.GitHub.Assignee)
 	c.GitHub.Reviewer = strings.TrimSpace(c.GitHub.Reviewer)
+	c.GitHub.PipelineTimeout = strings.TrimSpace(c.GitHub.PipelineTimeout)
 
 	// Validate GitLab configuration
 	if err := validateGitLabConfig(&c.GitLab); err != nil {
@@ -101,6 +123,33 @@ func (c *Config) Validate() error {
 	}
 
 	return nil
+}
+
+// validateTimeout validates timeout string format and bounds.
+// Empty string is valid (uses default). Returns parsed duration or error.
+//
+//nolint:unparam // duration return value is used, false positive from linter
+func validateTimeout(timeoutStr string, fieldName string) (time.Duration, error) {
+	if timeoutStr == "" {
+		return 0, nil // Empty is valid (uses default)
+	}
+
+	duration, err := time.ParseDuration(timeoutStr)
+	if err != nil {
+		return 0, fmt.Errorf("%w: invalid duration format '%s'", errInvalidTimeout, timeoutStr)
+	}
+
+	if duration < minPipelineTimeout {
+		return 0, fmt.Errorf("%w: %s must be at least %v (got %v)",
+			errTimeoutTooSmall, fieldName, minPipelineTimeout, duration)
+	}
+
+	if duration > maxPipelineTimeout {
+		return 0, fmt.Errorf("%w: %s must be at most %v (got %v)",
+			errTimeoutTooLarge, fieldName, maxPipelineTimeout, duration)
+	}
+
+	return duration, nil
 }
 
 // validateGitLabConfig validates GitLab-specific configuration fields.
@@ -117,6 +166,10 @@ func validateGitLabConfig(config *GitLabConfig) error {
 	}
 	if !isValidUsername(config.Reviewer) {
 		return fmt.Errorf("%w: '%s'", errGitLabReviewerInvalid, config.Reviewer)
+	}
+
+	if _, err := validateTimeout(config.PipelineTimeout, "gitlab.pipeline_timeout"); err != nil {
+		return err
 	}
 
 	return nil
@@ -136,6 +189,10 @@ func validateGitHubConfig(config *GitHubConfig) error {
 	}
 	if !isValidUsername(config.Reviewer) {
 		return fmt.Errorf("%w: '%s'", errGitHubReviewerInvalid, config.Reviewer)
+	}
+
+	if _, err := validateTimeout(config.PipelineTimeout, "github.pipeline_timeout"); err != nil {
+		return err
 	}
 
 	return nil

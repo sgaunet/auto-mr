@@ -41,13 +41,14 @@ var (
 )
 
 var (
-	logLevel    string
-	showVersion bool
-	noSquash    bool
-	msg         string
-	listLabels  bool   // List available labels and exit
-	labels      string // Comma-separated label names
-	log         *bullets.Logger
+	logLevel        string
+	showVersion     bool
+	noSquash        bool
+	msg             string
+	listLabels      bool   // List available labels and exit
+	labels          string // Comma-separated label names
+	pipelineTimeout string // Pipeline/workflow timeout duration
+	log             *bullets.Logger
 )
 
 var version = "dev"
@@ -67,7 +68,7 @@ and branch cleanup.`,
 		useManualLabels := cmd.Flags().Changed("labels")
 		manualLabelsValue := labels
 
-		if err := runAutoMR(useManualLabels, manualLabelsValue); err != nil {
+		if err := runAutoMR(cmd, useManualLabels, manualLabelsValue); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
@@ -86,6 +87,8 @@ func init() {
 		"List all available labels and exit")
 	rootCmd.Flags().StringVar(&labels, "labels", "",
 		"Comma-separated label names (e.g., \"bug,enhancement\"). Use empty string to skip labels.")
+	rootCmd.Flags().StringVar(&pipelineTimeout, "pipeline-timeout", "",
+		"Pipeline/workflow timeout (e.g., \"30m\", \"1h\", \"90m\"). Overrides config file. (default: 30m)")
 }
 
 func main() {
@@ -95,10 +98,48 @@ func main() {
 	}
 }
 
+// getPipelineTimeout resolves pipeline timeout from three sources with priority:
+// 1. CLI flag --pipeline-timeout (highest priority).
+// 2. Config file platform-specific timeout.
+// 3. Default timeout (30 minutes).
+func getPipelineTimeout(cmd *cobra.Command, platformConfig string) (time.Duration, error) {
+	// Priority 1: CLI flag
+	if cmd.Flags().Changed("pipeline-timeout") && pipelineTimeout != "" {
+		timeout, err := time.ParseDuration(pipelineTimeout)
+		if err != nil {
+			return 0, fmt.Errorf("invalid --pipeline-timeout: %w", err)
+		}
+		if timeout < config.MinPipelineTimeout || timeout > config.MaxPipelineTimeout {
+			return 0, fmt.Errorf("%w: --pipeline-timeout must be between %v and %v",
+				config.ErrInvalidTimeout, config.MinPipelineTimeout, config.MaxPipelineTimeout)
+		}
+		return timeout, nil
+	}
+
+	// Priority 2: Config file
+	if platformConfig != "" {
+		timeout, parseErr := time.ParseDuration(platformConfig)
+		if parseErr != nil {
+			// Should not happen after Validate(), but return default as fallback
+			log.Warnf("Invalid platform timeout config '%s', using default %v", platformConfig, defaultPipelineTimeout)
+			return defaultPipelineTimeout, nil //nolint:nilerr // intentional fallback to default on parse error
+		}
+		return timeout, nil
+	}
+
+	// Priority 3: Default
+	return defaultPipelineTimeout, nil
+}
+
 // formatConfigError provides user-friendly error messages for configuration errors.
 func formatConfigError(err error) error {
 	homeDir, _ := os.UserHomeDir()
 	configPath := filepath.Join(homeDir, ".config", "auto-mr", "config.yml")
+
+	// Check for timeout-related errors first
+	if timeoutErr := formatTimeoutError(err, configPath); timeoutErr != nil {
+		return timeoutErr
+	}
 
 	switch {
 	case errors.Is(err, config.ErrConfigNotFound):
@@ -142,7 +183,35 @@ func formatConfigError(err error) error {
 	}
 }
 
-func runAutoMR(useManualLabels bool, manualLabelsValue string) error {
+// formatTimeoutError handles timeout-specific error formatting.
+func formatTimeoutError(err error, configPath string) error {
+	switch {
+	case errors.Is(err, config.ErrInvalidTimeout):
+		return fmt.Errorf("%w\n\n"+
+			"Config file: %s\n"+
+			"pipeline_timeout must be a valid Go duration format:\n"+
+			"  Valid: \"30m\", \"1h\", \"1h30m\", \"90m\"\n"+
+			"  Invalid: \"30\" (no unit), \"abc\", \"-5m\"",
+			err, configPath)
+
+	case errors.Is(err, config.ErrTimeoutTooSmall):
+		return fmt.Errorf("%w\n\n"+
+			"Config file: %s\n"+
+			"pipeline_timeout must be at least 1 minute (1m)",
+			err, configPath)
+
+	case errors.Is(err, config.ErrTimeoutTooLarge):
+		return fmt.Errorf("%w\n\n"+
+			"Config file: %s\n"+
+			"pipeline_timeout must be at most 8 hours (8h)",
+			err, configPath)
+
+	default:
+		return nil // Not a timeout error
+	}
+}
+
+func runAutoMR(cmd *cobra.Command, useManualLabels bool, manualLabelsValue string) error {
 	log = logger.NewLogger(logLevel)
 	log.Info("auto-mr starting...")
 
@@ -183,7 +252,10 @@ func runAutoMR(useManualLabels bool, manualLabelsValue string) error {
 		return err
 	}
 
-	return routeToPlatform(platform, cfg, currentBranch, mainBranch, title, body, repo, useManualLabels, manualLabelsValue)
+	return routeToPlatform(
+		cmd, platform, cfg, currentBranch, mainBranch, title, body, repo,
+		useManualLabels, manualLabelsValue,
+	)
 }
 
 func validateBranches(repo *git.Repository) (string, string, error) {
@@ -295,6 +367,7 @@ func handleInteractiveSelection(
 }
 
 func routeToPlatform(
+	cmd *cobra.Command,
 	platform git.Platform,
 	cfg *config.Config,
 	currentBranch, mainBranch, title, body string,
@@ -304,9 +377,9 @@ func routeToPlatform(
 ) error {
 	switch platform {
 	case git.PlatformGitLab:
-		return handleGitLab(cfg, currentBranch, mainBranch, title, body, repo, useManualLabels, manualLabelsValue)
+		return handleGitLab(cmd, cfg, currentBranch, mainBranch, title, body, repo, useManualLabels, manualLabelsValue)
 	case git.PlatformGitHub:
-		return handleGitHub(cfg, currentBranch, mainBranch, title, body, repo, useManualLabels, manualLabelsValue)
+		return handleGitHub(cmd, cfg, currentBranch, mainBranch, title, body, repo, useManualLabels, manualLabelsValue)
 	default:
 		return fmt.Errorf("%w: %s", errUnsupportedPlatform, platform)
 	}
@@ -436,6 +509,7 @@ func buildLabelMap(availableLabels any) (map[string]bool, error) {
 }
 
 func handleGitLab(
+	cmd *cobra.Command,
 	cfg *config.Config,
 	currentBranch, mainBranch, title, body string,
 	repo *git.Repository,
@@ -457,7 +531,7 @@ func handleGitLab(
 		return err
 	}
 
-	if err := waitAndMergeGitLabMR(client, mr, !noSquash, title); err != nil {
+	if err := waitAndMergeGitLabMR(cmd, cfg, client, mr, !noSquash, title); err != nil {
 		return err
 	}
 
@@ -548,10 +622,22 @@ func createGitLabMR(
 	return mr, nil
 }
 
-func waitAndMergeGitLabMR(client *gitlab.Client, mr *gogitlab.MergeRequest, squash bool, commitTitle string) error {
+func waitAndMergeGitLabMR(
+	cmd *cobra.Command,
+	cfg *config.Config,
+	client *gitlab.Client,
+	mr *gogitlab.MergeRequest,
+	squash bool,
+	commitTitle string,
+) error {
 	time.Sleep(pipelineStartupDelay)
 
-	status, err := client.WaitForPipeline(defaultPipelineTimeout)
+	timeout, err := getPipelineTimeout(cmd, cfg.GitLab.PipelineTimeout)
+	if err != nil {
+		return err
+	}
+
+	status, err := client.WaitForPipeline(timeout)
 	if err != nil {
 		return fmt.Errorf("failed to wait for pipeline: %w", err)
 	}
@@ -579,6 +665,7 @@ func waitAndMergeGitLabMR(client *gitlab.Client, mr *gogitlab.MergeRequest, squa
 }
 
 func handleGitHub(
+	cmd *cobra.Command,
 	cfg *config.Config,
 	currentBranch, mainBranch, title, body string,
 	repo *git.Repository,
@@ -600,7 +687,7 @@ func handleGitHub(
 		return err
 	}
 
-	if err := waitAndMergeGitHubPR(client, pr, title, !noSquash); err != nil {
+	if err := waitAndMergeGitHubPR(cmd, cfg, client, pr, title, !noSquash); err != nil {
 		return err
 	}
 
@@ -693,6 +780,8 @@ func createGitHubPR(
 }
 
 func waitAndMergeGitHubPR(
+	cmd *cobra.Command,
+	cfg *config.Config,
 	client *ghclient.Client,
 	pr *github.PullRequest,
 	commitTitle string,
@@ -700,7 +789,12 @@ func waitAndMergeGitHubPR(
 ) error {
 	time.Sleep(pipelineStartupDelay)
 
-	conclusion, err := client.WaitForWorkflows(defaultPipelineTimeout)
+	timeout, err := getPipelineTimeout(cmd, cfg.GitHub.PipelineTimeout)
+	if err != nil {
+		return err
+	}
+
+	conclusion, err := client.WaitForWorkflows(timeout)
 	if err != nil {
 		return fmt.Errorf("failed to wait for workflows: %w", err)
 	}
