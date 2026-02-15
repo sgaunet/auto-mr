@@ -731,42 +731,62 @@ func waitAndMergeGitHubPR(
 func cleanup(repo *git.Repository, mainBranch, currentBranch string) error {
 	log.Info("Cleanup...")
 	log.IncreasePadding()
+	defer log.DecreasePadding()
 
-	// Switch to main branch
 	log.Infof("Switching to main branch: %s", mainBranch)
-	if err := repo.SwitchBranch(mainBranch); err != nil {
-		log.DecreasePadding()
-		return fmt.Errorf(
-			"failed to switch to main branch: %w\n\n"+
-				"If you have local changes that conflict, please handle them manually:\n"+
-				"  - Commit your changes, or\n"+
-				"  - Stash your changes with: git stash\n"+
-				"  - Then run: git switch %s",
-			err, mainBranch)
+	report := repo.Cleanup(mainBranch, currentBranch)
+
+	// Display results with status icons
+	displayCleanupStatus(report)
+
+	// Check if critical operations succeeded
+	if !report.Success() {
+		return fmt.Errorf("cleanup failed: %w", report.FirstError())
 	}
 
-	// Pull latest changes
-	log.Info("Pulling latest changes...")
-	if err := repo.Pull(); err != nil {
-		log.DecreasePadding()
-		return fmt.Errorf("failed to pull changes: %w\n\nPlease resolve any conflicts manually and run: git pull", err)
+	// Warn about non-critical failures
+	if report.PruneError != nil || report.DeleteError != nil {
+		log.Warn("Cleanup completed with warnings (see above)")
+	} else {
+		log.Info("auto-mr completed successfully!")
 	}
 
-	// Fetch and prune
-	log.Info("Fetching and pruning...")
-	if err := repo.FetchAndPrune(); err != nil {
-		log.DecreasePadding()
-		return fmt.Errorf("failed to fetch and prune: %w", err)
-	}
-
-	// Delete feature branch
-	log.Infof("Deleting feature branch: %s", currentBranch)
-	if err := repo.DeleteBranch(currentBranch); err != nil {
-		log.DecreasePadding()
-		return fmt.Errorf("failed to delete branch: %w", err)
-	}
-
-	log.DecreasePadding()
-	log.Info("auto-mr completed successfully!")
 	return nil
+}
+
+func displayCleanupStatus(report *git.CleanupReport) {
+	steps := []struct {
+		name      string
+		completed bool
+		err       error
+	}{
+		{"Switch to main branch", report.SwitchedBranch, report.SwitchError},
+		{"Pull latest changes", report.PulledChanges, report.PullError},
+		{"Fetch and prune", report.Pruned, report.PruneError},
+		{"Delete feature branch", report.DeletedBranch, report.DeleteError},
+	}
+
+	for _, step := range steps {
+		icon := getStatusIcon(step.completed, step.err)
+		msg := fmt.Sprintf("%s %s", icon, step.name)
+
+		switch {
+		case step.err != nil:
+			log.Warnf("%s - %v", msg, step.err)
+		case step.completed:
+			log.Info(msg)
+		default:
+			log.Info(msg + " - not attempted")
+		}
+	}
+}
+
+func getStatusIcon(completed bool, err error) string {
+	if err != nil {
+		return "✗" // Failed
+	}
+	if completed {
+		return "✓" // Success
+	}
+	return "—" // Not attempted
 }
