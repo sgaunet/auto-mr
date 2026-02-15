@@ -1,4 +1,18 @@
-// Package security provides token security and credential sanitization utilities.
+// Package security provides token security and credential sanitization utilities
+// to prevent accidental leakage of sensitive data in logs and error messages.
+//
+// The package provides three layers of protection:
+//   - [SecureToken]: wraps sensitive strings so fmt operations return masked values
+//   - [SanitizeString] / [SanitizeError]: regex-based redaction of known token patterns
+//   - [MaskSSHKeyPath]: obfuscates file paths for safe logging
+//
+// Usage:
+//
+//	token := security.NewSecureToken("glpat-secret123456")
+//	fmt.Println(token) // "[token:****3456]"
+//
+//	safe := security.SanitizeString("auth: glpat-abcdef1234567890")
+//	// "auth: [gitlab-token-redacted]"
 package security
 
 import "fmt"

@@ -23,7 +23,11 @@ const (
 	statusSkipped          = "skipped"
 )
 
-// Client represents a GitLab API client wrapper.
+// Client represents a GitLab API client wrapper that manages merge request
+// lifecycle operations. It stores internal state (projectID, mrIID, mrSHA)
+// that is set by methods like [Client.SetProjectFromURL] and [Client.CreateMergeRequest].
+//
+// Not safe for concurrent use.
 type Client struct {
 	client       *gitlab.Client
 	projectID    string
@@ -40,16 +44,17 @@ type Label struct {
 }
 
 // Job represents a GitLab pipeline job with detailed status information.
+// Status values are: "created", "pending", "running", "success", "failed", "canceled", "skipped".
 type Job struct {
-	ID         int64
-	Name       string
-	Status     string
-	Stage      string
-	CreatedAt  time.Time
-	StartedAt  *time.Time
-	FinishedAt *time.Time
-	Duration   float64
-	WebURL     string
+	ID         int64      // Unique job ID
+	Name       string     // Job name as defined in .gitlab-ci.yml
+	Status     string     // Current job status
+	Stage      string     // Pipeline stage (e.g., "build", "test", "deploy")
+	CreatedAt  time.Time  // When the job was created
+	StartedAt  *time.Time // When the job started running (nil if not started)
+	FinishedAt *time.Time // When the job finished (nil if still running)
+	Duration   float64    // Job duration in seconds
+	WebURL     string     // Browser URL for the job
 }
 
 // jobTracker tracks jobs and their display handles/spinners with thread-safe access.

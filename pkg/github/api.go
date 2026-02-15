@@ -10,6 +10,12 @@ import (
 )
 
 // SetRepositoryFromURL sets the repository from a git remote URL.
+// Supports both HTTPS and SSH URL formats:
+//   - https://github.com/owner/repo.git
+//   - git@github.com:owner/repo.git
+//
+// Returns [ErrInvalidURLFormat] if the URL cannot be parsed into owner/repo.
+// Returns a wrapped error if the repository does not exist or the API call fails.
 func (c *Client) SetRepositoryFromURL(url string) error {
 	// Extract owner/repo from URL
 	// Supports both HTTPS and SSH formats:
@@ -42,6 +48,9 @@ func (c *Client) SetRepositoryFromURL(url string) error {
 }
 
 // ListLabels returns all labels for the repository.
+// [Client.SetRepositoryFromURL] must be called before this method.
+//
+// Returns an empty slice if no labels are configured.
 func (c *Client) ListLabels() ([]*Label, error) {
 	c.log.Debug("Listing GitHub labels")
 	labels, _, err := c.client.Issues.ListLabels(c.ctx(), c.owner, c.repo, nil)
@@ -59,6 +68,19 @@ func (c *Client) ListLabels() ([]*Label, error) {
 }
 
 // CreatePullRequest creates a new pull request with assignees, reviewers, and labels.
+// Reviewers that match the PR author are automatically filtered out.
+//
+// Parameters:
+//   - head: the source branch name
+//   - base: the target branch (e.g., "main")
+//   - title: PR title (must not be empty)
+//   - body: PR description
+//   - assignees: GitHub usernames to assign (may be nil)
+//   - reviewers: GitHub usernames to request review from (may be nil)
+//   - labels: label names to apply (may be nil)
+//
+// Returns [ErrPRAlreadyExists] if a PR already exists for the same branches.
+// Stores the PR number and SHA internally for use by [Client.WaitForWorkflows].
 func (c *Client) CreatePullRequest(
 	head, base, title, body string,
 	assignees, reviewers, labels []string,
@@ -112,7 +134,10 @@ func (c *Client) CreatePullRequest(
 	return pr, nil
 }
 
-// GetPullRequestByBranch fetches an existing pull request by head and base branches.
+// GetPullRequestByBranch fetches an existing open pull request by head and base branches.
+// Only the first matching PR is returned. Stores the PR number and SHA internally.
+//
+// Returns [ErrPRNotFound] if no open PR matches the given branches.
 func (c *Client) GetPullRequestByBranch(head, base string) (*github.PullRequest, error) {
 	prs, _, err := c.client.PullRequests.List(c.ctx(), c.owner, c.repo, &github.PullRequestListOptions{
 		State: "open",
@@ -134,8 +159,11 @@ func (c *Client) GetPullRequestByBranch(head, base string) (*github.PullRequest,
 }
 
 // MergePullRequest merges a pull request using the specified merge method.
-// mergeMethod can be "merge", "squash", or "rebase".
-// commitTitle is used as the merge commit message.
+//
+// Parameters:
+//   - prNumber: the pull request number
+//   - mergeMethod: one of "merge", "squash", or "rebase" (see [GetMergeMethod])
+//   - commitTitle: used as the merge commit message
 func (c *Client) MergePullRequest(prNumber int, mergeMethod, commitTitle string) error {
 	c.log.Debug(fmt.Sprintf("Merging pull request #%d using method: %s", prNumber, mergeMethod))
 	options := &github.PullRequestOptions{
@@ -166,7 +194,10 @@ func (c *Client) GetPullRequestsByHead(head string) ([]*github.PullRequest, erro
 	return prs, nil
 }
 
-// DeleteBranch deletes a branch from the remote repository.
+// DeleteBranch deletes a branch from the remote repository via the GitHub Git Refs API.
+//
+// Parameters:
+//   - branch: the branch name to delete (without "refs/heads/" prefix)
 func (c *Client) DeleteBranch(branch string) error {
 	_, err := c.client.Git.DeleteRef(c.ctx(), c.owner, c.repo, "heads/"+branch)
 	if err != nil {

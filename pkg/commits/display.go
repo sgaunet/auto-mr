@@ -9,7 +9,8 @@ const (
 	SelectionPageSize = 15
 )
 
-// Renderer implements the SelectionRenderer interface using survey library.
+// Renderer implements the [SelectionRenderer] interface using the survey library
+// for interactive terminal prompts.
 type Renderer struct{}
 
 // NewRenderer creates a new selection renderer.
@@ -17,9 +18,15 @@ func NewRenderer() *Renderer {
 	return &Renderer{}
 }
 
-// DisplaySelectionPrompt shows interactive commit selection UI.
-// Returns selected commit index.
-// Returns error if user cancels (Ctrl+C).
+// DisplaySelectionPrompt shows an interactive commit selection UI using survey.Select.
+// Each commit is displayed as "[ShortHash] Title" with at most [SelectionPageSize] items visible.
+//
+// Parameters:
+//   - commits: the list of commits to present (must not be empty)
+//
+// Returns the zero-based index of the selected commit.
+// Returns [ErrAllCommitsInvalid] if commits is empty.
+// Returns [ErrSelectionCancelled] if the user cancels with Ctrl+C.
 func (r *Renderer) DisplaySelectionPrompt(commits []Commit) (int, error) {
 	if len(commits) == 0 {
 		return -1, ErrAllCommitsInvalid

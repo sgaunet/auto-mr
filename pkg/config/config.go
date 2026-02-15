@@ -1,4 +1,16 @@
-// Package config handles loading and validation of user configuration.
+// Package config handles loading and validation of user configuration from
+// ~/.config/auto-mr/config.yml.
+//
+// The configuration file uses YAML format with required fields for both
+// GitLab and GitHub platforms (assignee and reviewer usernames). Optional
+// pipeline_timeout fields accept Go duration strings (e.g., "45m", "1h30m")
+// with bounds of 1 minute to 8 hours.
+//
+// Usage:
+//
+//	cfg, err := config.Load()
+//	fmt.Println(cfg.GitLab.Assignee) // "john-doe"
+//	fmt.Println(cfg.GitHub.PipelineTimeout) // "1h"
 package config
 
 import (
@@ -74,7 +86,11 @@ type GitHubConfig struct {
 	PipelineTimeout string `yaml:"pipeline_timeout,omitempty"`
 }
 
-// Load reads and parses the configuration file from the user's home directory.
+// Load reads and parses the configuration file from ~/.config/auto-mr/config.yml.
+// The configuration is validated automatically after parsing.
+//
+// Returns [ErrConfigNotFound] if the config file does not exist.
+// Returns a validation error if any required field is missing or invalid.
 func Load() (*Config, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -103,6 +119,13 @@ func Load() (*Config, error) {
 
 // Validate checks that all required configuration fields are set and valid.
 // It trims whitespace from all fields before validation and performs format checks.
+//
+// Validation includes:
+//   - Required fields: assignee and reviewer for both platforms
+//   - Username format: alphanumeric, hyphens, underscores, 1-39 chars
+//   - Timeout format: valid Go duration, [MinPipelineTimeout] to [MaxPipelineTimeout]
+//
+// Returns the first validation error encountered.
 func (c *Config) Validate() error {
 	// Trim whitespace from all fields before validation
 	c.GitLab.Assignee = strings.TrimSpace(c.GitLab.Assignee)

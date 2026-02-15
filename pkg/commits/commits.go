@@ -1,4 +1,25 @@
-// Package commits provides commit history retrieval and message selection for auto-mr.
+// Package commits provides commit history retrieval and message selection for merge/pull requests.
+//
+// The package handles the complete commit message workflow:
+//   - Retrieving commits from git branches via go-git
+//   - Filtering out merge commits and empty messages
+//   - Auto-selecting single commit messages
+//   - Interactive selection when multiple commits exist
+//   - Manual message override via CLI flag
+//
+// The architecture uses three interfaces for testability:
+//   - [CommitRetriever] for git operations
+//   - [MessageSelector] for selection logic
+//   - [SelectionRenderer] for terminal UI
+//
+// Usage:
+//
+//	retriever := commits.NewRetriever(repo)
+//	selection, err := retriever.GetMessageForMR("feature", "main", "")
+//	fmt.Println(selection.Title) // First line of selected commit message
+//
+// Thread Safety: [Retriever] and [Selector] are not safe for concurrent use.
+// Each goroutine should create its own instance.
 package commits
 
 import (
@@ -25,12 +46,22 @@ var (
 )
 
 // Retriever handles commit history retrieval and message selection.
+// It wraps a go-git repository and provides methods to retrieve commits,
+// filter them, and select appropriate messages for merge/pull requests.
+//
+// Not safe for concurrent use.
 type Retriever struct {
 	repo   *git.Repository
 	logger *slog.Logger
 }
 
 // NewRetriever creates a new commit retriever for the given repository.
+//
+// Parameters:
+//   - repo: an opened go-git repository (must not be nil)
+//
+// The retriever uses slog.Default() for logging. Call [Retriever.SetLogger]
+// to override.
 func NewRetriever(repo *git.Repository) *Retriever {
 	return &Retriever{
 		repo:   repo,
@@ -43,9 +74,15 @@ func (r *Retriever) SetLogger(logger *slog.Logger) {
 	r.logger = logger
 }
 
-// GetCommits retrieves all commits from the specified branch.
-// Returns empty slice if branch has no commits.
-// Returns error if branch doesn't exist or git operation fails.
+// GetCommits retrieves all commits from the specified branch, up to [MaxCommitsToRetrieve].
+//
+// Parameters:
+//   - branch: local branch name (e.g., "feature-x", not "refs/heads/feature-x")
+//
+// Returns [ErrNoCommits] if the branch has no commits.
+// Returns a wrapped error if the branch doesn't exist or git operations fail.
+//
+// Memory: allocates up to [MaxCommitsToRetrieve] (1000) Commit structs.
 func (r *Retriever) GetCommits(branch string) ([]Commit, error) {
 	r.logger.Debug("retrieving commits from branch", "branch", branch)
 
@@ -90,8 +127,14 @@ func (r *Retriever) GetCommits(branch string) ([]Commit, error) {
 
 // GetCommitsSinceBranch retrieves commits from currentBranch since it diverged from baseBranch.
 // Only returns commits unique to currentBranch (not present in baseBranch).
-// Returns empty slice if no commits exist since divergence.
-// Returns error if branches don't exist or git operation fails.
+//
+// Parameters:
+//   - currentBranch: the feature branch to read commits from
+//   - baseBranch: the branch to compare against (e.g., "main")
+//
+// Returns [ErrNoCommits] if no commits exist since divergence.
+// Returns a wrapped error if either branch doesn't exist or git operations fail.
+// At most [MaxCommitsToRetrieve] commits are returned.
 func (r *Retriever) GetCommitsSinceBranch(currentBranch, baseBranch string) ([]Commit, error) {
 	r.logger.Debug("retrieving commits since branch divergence",
 		"currentBranch", currentBranch,
@@ -151,10 +194,18 @@ func (r *Retriever) GetCommitsSinceBranch(currentBranch, baseBranch string) ([]C
 }
 
 // GetMessageForMR determines which commit message to use for MR/PR.
-// Handles auto-selection, interactive selection, and manual override.
-// Only retrieves commits unique to the feature branch (since divergence from mainBranch).
-// Returns ErrNoCommits if no valid commits exist.
-// Returns ErrAllCommitsInvalid if all commits are merge commits or have empty messages.
+// It applies the following priority:
+//  1. Manual override: if msgFlagValue is non-empty, it is parsed and returned directly.
+//  2. Auto-select: if exactly one valid commit exists, it is selected automatically.
+//  3. Multiple commits: returns [ErrMultipleCommitsFound] (interactive selection not yet implemented).
+//
+// Parameters:
+//   - branch: the feature branch name
+//   - mainBranch: the base branch to compare against (e.g., "main")
+//   - msgFlagValue: manual message from --msg flag (empty string to skip)
+//
+// Returns [ErrNoCommits] if no commits exist since divergence.
+// Returns [ErrAllCommitsInvalid] if all commits are merge commits or have empty messages.
 func (r *Retriever) GetMessageForMR(branch, mainBranch, msgFlagValue string) (MessageSelection, error) {
 	r.logger.Debug("getting message for MR/PR",
 		"branch", branch,

@@ -46,8 +46,12 @@ func compileRegexPatterns() {
 	})
 }
 
-// SanitizeString removes sensitive tokens from a string using regex patterns.
+// SanitizeString removes sensitive tokens from a string using compiled regex patterns.
+// It detects and redacts GitLab tokens (glpat-*), GitHub tokens (ghp_/gho_/ghs_*),
+// authorization headers, and generic bearer tokens.
 // This provides defense-in-depth protection against token leakage.
+//
+// Thread Safety: Safe for concurrent use after first call (regex patterns compiled via sync.Once).
 func SanitizeString(s string) string {
 	compileRegexPatterns()
 
@@ -71,8 +75,9 @@ func SanitizeString(s string) string {
 	return s
 }
 
-// SanitizeError wraps an error and sanitizes its error message.
-// This ensures tokens don't leak through error propagation.
+// SanitizeError wraps an error with [SanitizeString] applied to its message.
+// Returns nil if err is nil. The original error chain is not preserved;
+// the returned error wraps an internal errSanitized sentinel.
 func SanitizeError(err error) error {
 	if err == nil {
 		return nil
@@ -106,8 +111,10 @@ func MaskSSHKeyPath(path string) string {
 	return filepath.Base(path)
 }
 
-// SanitizeMap redacts sensitive keys in a map.
-// Useful for logging structured data that might contain credentials.
+// SanitizeMap redacts values whose keys match common sensitive names
+// (token, password, secret, api_key, auth, credential, authorization).
+// Non-sensitive string values are also passed through [SanitizeString].
+// Returns nil if m is nil.
 func SanitizeMap(m map[string]any) map[string]any {
 	if m == nil {
 		return nil

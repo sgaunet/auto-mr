@@ -1,4 +1,16 @@
 // Package platform provides a unified abstraction layer for GitLab and GitHub operations.
+//
+// The [Provider] interface defines a common API for merge/pull request lifecycle
+// operations that both platforms implement. This allows the main application logic
+// to be platform-agnostic.
+//
+// Use [NewProvider] to create the appropriate adapter based on the detected platform:
+//
+//	provider, err := platform.NewProvider(git.PlatformGitHub, cfg, logger)
+//	provider.Initialize(remoteURL)
+//	mr, _ := provider.Create(platform.CreateParams{...})
+//	status, _ := provider.WaitForPipeline(30 * time.Minute)
+//	provider.Merge(platform.MergeParams{MRID: mr.ID, ...})
 package platform
 
 // Label represents a platform-agnostic label.

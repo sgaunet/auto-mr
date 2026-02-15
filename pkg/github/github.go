@@ -1,4 +1,26 @@
-// Package github provides GitHub API client operations.
+// Package github provides a GitHub API client for pull request lifecycle management.
+//
+// The package handles:
+//   - Creating and fetching pull requests with assignees, reviewers, and labels
+//   - Waiting for GitHub Actions workflow completion with real-time job-level visualization
+//   - Merging pull requests (merge, squash, or rebase strategies)
+//   - Deleting remote branches after merge
+//   - Label retrieval for interactive selection
+//
+// Authentication requires a GITHUB_TOKEN environment variable containing a
+// personal access token with repo scope.
+//
+// Usage:
+//
+//	client, err := github.NewClient()
+//	client.SetLogger(logger)
+//	client.SetRepositoryFromURL("https://github.com/owner/repo.git")
+//	labels, _ := client.ListLabels()
+//	pr, _ := client.CreatePullRequest("feature", "main", "Title", "Body", []string{"user"}, []string{"reviewer"}, nil)
+//
+// Thread Safety: [Client] is not safe for concurrent use. The workflow waiting
+// methods use internal goroutines but the Client itself should be used from
+// a single goroutine.
 package github
 
 import (
@@ -14,7 +36,9 @@ import (
 	"golang.org/x/oauth2"
 )
 
-// NewClient creates a new GitHub client.
+// NewClient creates a new GitHub client authenticated via the GITHUB_TOKEN environment variable.
+//
+// Returns [ErrTokenRequired] if GITHUB_TOKEN is not set.
 func NewClient() (*Client, error) {
 	token := os.Getenv("GITHUB_TOKEN")
 	if token == "" {
@@ -46,7 +70,17 @@ func (c *Client) SetLogger(logger *bullets.Logger) {
 	c.log.Debug("GitHub client logger configured")
 }
 
-// WaitForWorkflows waits for all workflow runs to complete for the pull request.
+// WaitForWorkflows waits for all GitHub Actions workflow runs to complete for the pull request.
+// It polls at 5-second intervals and displays real-time job-level progress with animated spinners.
+// If no workflows are configured, it returns "success" immediately.
+//
+// Parameters:
+//   - timeout: maximum wait duration (typically 1m to 8h)
+//
+// Returns the overall conclusion ("success", "failure", "cancelled", etc.).
+// Returns [ErrWorkflowTimeout] if the timeout is exceeded.
+//
+// A pull request must have been created or fetched before calling this method.
 func (c *Client) WaitForWorkflows(timeout time.Duration) (string, error) {
 	c.log.Debug(fmt.Sprintf("Waiting for workflows, timeout: %v", timeout))
 	start := time.Now()
@@ -186,7 +220,7 @@ func (c *Client) processCheckRunsFallback(tracker *checkTracker, checkRuns []*gi
 	return c.analyzeJobCompletion(jobs)
 }
 
-// GetMergeMethod returns the appropriate merge method string based on squash flag.
+// GetMergeMethod returns the appropriate merge method string for the GitHub API.
 // Returns "squash" if squash is true, otherwise "merge".
 func GetMergeMethod(squash bool) string {
 	if squash {

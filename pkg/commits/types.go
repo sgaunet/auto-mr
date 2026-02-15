@@ -10,7 +10,7 @@ const (
 	DefaultDisplayTitleLength = 80
 )
 
-// SelectionMethod represents how the message was selected.
+// SelectionMethod represents how the commit message was selected for the MR/PR.
 type SelectionMethod int
 
 const (
@@ -52,7 +52,8 @@ func (c *Commit) IsMergeCommit() bool {
 	return len(c.ParentHashes) > 1
 }
 
-// TitleTruncated returns title truncated to maxLen with "..." suffix if longer.
+// TitleTruncated returns the title truncated to maxLen characters with "..." suffix if longer.
+// If maxLen is less than 3, the result may be shorter than expected.
 func (c *Commit) TitleTruncated(maxLen int) string {
 	if len(c.Title) <= maxLen {
 		return c.Title

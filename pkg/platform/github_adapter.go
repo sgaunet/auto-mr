@@ -10,7 +10,8 @@ import (
 	"github.com/sgaunet/bullets"
 )
 
-// GitHubAdapter wraps a GitHub client to implement the Provider interface.
+// GitHubAdapter wraps a GitHub client to implement the [Provider] interface.
+// It translates between the platform-agnostic types and the GitHub-specific API.
 type GitHubAdapter struct {
 	client *ghclient.Client
 	cfg    config.GitHubConfig

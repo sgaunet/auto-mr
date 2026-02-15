@@ -14,7 +14,15 @@ import (
 // errUnsupportedPlatform is returned when the detected platform is not supported.
 var errUnsupportedPlatform = errors.New("unsupported platform")
 
-// NewProvider creates the appropriate Provider implementation based on the detected platform.
+// NewProvider creates the appropriate [Provider] implementation based on the detected platform.
+// It creates the underlying API client, configures logging, and wraps it in the appropriate adapter.
+//
+// Parameters:
+//   - p: the detected platform ([git.PlatformGitLab] or [git.PlatformGitHub])
+//   - cfg: the loaded configuration (must not be nil)
+//   - logger: the logger instance for debug output
+//
+// Returns errUnsupportedPlatform if the platform is not GitLab or GitHub.
 //
 //nolint:ireturn // Factory function must return interface to enable platform abstraction.
 func NewProvider(p git.Platform, cfg *config.Config, logger *bullets.Logger) (Provider, error) {

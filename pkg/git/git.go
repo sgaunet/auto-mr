@@ -1,4 +1,23 @@
-// Package git provides git repository operations using go-git library.
+// Package git provides git repository operations for auto-mr.
+//
+// The package uses a hybrid approach:
+//   - Push operations use go-git/go-git/v5 for proper authentication handling with tokens and SSH keys
+//   - Cleanup operations (switch, pull, fetch, delete) use native git commands via exec.Command
+//     to match shell script behavior and prevent silent data loss
+//
+// Authentication is determined automatically from the remote URL:
+//   - HTTPS URLs: uses GITLAB_TOKEN or GITHUB_TOKEN environment variables
+//   - SSH URLs: tries SSH agent first, then key files (~/.ssh/id_ed25519, id_rsa, id_ecdsa)
+//
+// Usage:
+//
+//	repo, err := git.OpenRepository(".")
+//	repo.SetLogger(logger)
+//	branch, _ := repo.GetCurrentBranch()
+//	platform, _ := repo.DetectPlatform()
+//	repo.PushBranch(branch)
+//
+// Thread Safety: [Repository] is not safe for concurrent use.
 package git
 
 import (
@@ -43,7 +62,8 @@ var (
 	errNotGitRepository    = errors.New("not a git repository (or any parent up to mount point)")
 )
 
-// GitTimeoutError wraps timeout errors with operation context.
+// GitTimeoutError wraps timeout errors with the name of the operation that timed out
+// and the configured timeout duration. Use errors.As to check for this error type.
 //
 //nolint:revive // Package-qualified name is intentional for clarity
 type GitTimeoutError struct {
@@ -72,7 +92,10 @@ type authMethod struct {
 	method transport.AuthMethod
 }
 
-// Repository wraps a go-git repository with additional functionality.
+// Repository wraps a go-git repository with authentication and logging.
+// It provides both go-git-based and native git operations.
+//
+// Not safe for concurrent use.
 type Repository struct {
 	repo    *git.Repository
 	gitRoot string // absolute path to git repository root
@@ -121,6 +144,13 @@ func findGitRoot(startPath string) (string, error) {
 }
 
 // OpenRepository opens a git repository at the given path.
+// It searches upward from path to find the .git directory and configures
+// authentication automatically based on the remote URL.
+//
+// Parameters:
+//   - path: any path within the git repository (absolute or relative)
+//
+// Returns an error if the path is not within a git repository or authentication setup fails.
 func OpenRepository(path string) (*Repository, error) {
 	noLog := logger.NoLogger()
 
@@ -288,7 +318,10 @@ func setupSSHAuth(logger *bullets.Logger) (*authMethod, error) {
 	return nil, errNoSSHKeys
 }
 
-// GetMainBranch determines the main branch name (main or master).
+// GetMainBranch determines the main branch name by checking the remote HEAD reference.
+// Falls back to checking for "main" and "master" branches if the remote HEAD is unavailable.
+//
+// Returns errMainBranchNotFound if neither method succeeds.
 func (r *Repository) GetMainBranch() (string, error) {
 	r.log.Debug("Determining main branch")
 	remote, err := r.repo.Remote("origin")
@@ -326,7 +359,9 @@ func (r *Repository) GetMainBranch() (string, error) {
 	return "", errMainBranchNotFound
 }
 
-// GetCurrentBranch returns the name of the currently checked out branch.
+// GetCurrentBranch returns the short name of the currently checked out branch.
+//
+// Returns errHEADNotBranch if HEAD is in detached state.
 func (r *Repository) GetCurrentBranch() (string, error) {
 	head, err := r.repo.Head()
 	if err != nil {
@@ -361,7 +396,11 @@ func (r *Repository) HasStagedChanges() (bool, error) {
 	return false, nil
 }
 
-// DetectPlatform determines if the repository is hosted on GitLab or GitHub.
+// DetectPlatform determines if the repository is hosted on GitLab or GitHub
+// by inspecting the origin remote URL for "gitlab.com" or "github.com".
+//
+// Returns [PlatformGitLab] or [PlatformGitHub].
+// Returns errUnsupportedPlatform if the URL contains neither.
 func (r *Repository) DetectPlatform() (Platform, error) {
 	remote, err := r.repo.Remote("origin")
 	if err != nil {
@@ -384,7 +423,11 @@ func (r *Repository) DetectPlatform() (Platform, error) {
 	return "", errUnsupportedPlatform
 }
 
-// PushBranch pushes the specified branch to the origin remote.
+// PushBranch pushes the specified branch to the origin remote using go-git.
+// If the branch is already up to date, no error is returned.
+//
+// Parameters:
+//   - branchName: the local branch name to push
 func (r *Repository) PushBranch(branchName string) error {
 	r.log.Debug("Pushing branch: " + branchName)
 	err := r.repo.Push(&git.PushOptions{
@@ -401,9 +444,16 @@ func (r *Repository) PushBranch(branchName string) error {
 	return nil
 }
 
-// SwitchBranch switches to the specified branch using native git command.
+// SwitchBranch switches to the specified branch using native "git switch".
 // This will fail if there are local changes that would conflict with the switch,
 // forcing the user to handle conflicts manually (matching auto-mr.sh behavior).
+// Untracked files are preserved.
+//
+// Parameters:
+//   - ctx: context for cancellation (further bounded by localGitTimeout)
+//   - branchName: the branch to switch to
+//
+// Returns [*GitTimeoutError] if the operation exceeds localGitTimeout (10s).
 func (r *Repository) SwitchBranch(ctx context.Context, branchName string) error {
 	r.log.Debug("Switching to branch using git switch: " + branchName)
 
@@ -433,7 +483,12 @@ func (r *Repository) SwitchBranch(ctx context.Context, branchName string) error 
 	return nil
 }
 
-// Pull fetches and merges changes from the remote tracking branch using native git command.
+// Pull fetches and merges changes from the remote tracking branch using native "git pull".
+//
+// Parameters:
+//   - ctx: context for cancellation (further bounded by networkGitTimeout)
+//
+// Returns [*GitTimeoutError] if the operation exceeds networkGitTimeout (2m).
 func (r *Repository) Pull(ctx context.Context) error {
 	r.log.Debug("Pulling changes using git pull")
 
@@ -462,7 +517,13 @@ func (r *Repository) Pull(ctx context.Context) error {
 	return nil
 }
 
-// DeleteBranch force-deletes the specified local branch using native git command.
+// DeleteBranch force-deletes the specified local branch using native "git branch -D".
+//
+// Parameters:
+//   - ctx: context for cancellation (further bounded by localGitTimeout)
+//   - branchName: the local branch to delete
+//
+// Returns [*GitTimeoutError] if the operation exceeds localGitTimeout (10s).
 func (r *Repository) DeleteBranch(ctx context.Context, branchName string) error {
 	r.log.Debug("Deleting branch using git branch -D: " + branchName)
 
@@ -491,7 +552,12 @@ func (r *Repository) DeleteBranch(ctx context.Context, branchName string) error 
 	return nil
 }
 
-// FetchAndPrune fetches from origin and prunes deleted remote branches using native git command.
+// FetchAndPrune fetches from origin and prunes deleted remote branches using native "git fetch --prune".
+//
+// Parameters:
+//   - ctx: context for cancellation (further bounded by networkGitTimeout)
+//
+// Returns [*GitTimeoutError] if the operation exceeds networkGitTimeout (2m).
 func (r *Repository) FetchAndPrune(ctx context.Context) error {
 	r.log.Debug("Fetching and pruning using git fetch --prune")
 
@@ -520,7 +586,7 @@ func (r *Repository) FetchAndPrune(ctx context.Context) error {
 	return nil
 }
 
-// GetLatestCommitMessage returns the commit message of the current HEAD.
+// GetLatestCommitMessage returns the full commit message of the current HEAD commit.
 func (r *Repository) GetLatestCommitMessage() (string, error) {
 	head, err := r.repo.Head()
 	if err != nil {
@@ -535,7 +601,11 @@ func (r *Repository) GetLatestCommitMessage() (string, error) {
 	return commit.Message, nil
 }
 
-// GetCommitsSinceMain returns all commits on the current branch since it diverged from main.
+// GetCommitsSinceMain returns all commits on the current branch since it diverged from the main branch.
+// Iteration stops when the main branch HEAD commit is reached.
+//
+// Parameters:
+//   - mainBranch: the base branch name (e.g., "main")
 func (r *Repository) GetCommitsSinceMain(mainBranch string) ([]*object.Commit, error) {
 	currentHead, err := r.repo.Head()
 	if err != nil {
@@ -571,7 +641,12 @@ func (r *Repository) GetCommitsSinceMain(mainBranch string) ([]*object.Commit, e
 	return commits, nil
 }
 
-// GetRemoteURL returns the URL of the specified remote.
+// GetRemoteURL returns the first URL configured for the specified remote.
+//
+// Parameters:
+//   - remoteName: the remote name (e.g., "origin")
+//
+// Returns errNoRemoteURLs if the remote has no configured URLs.
 func (r *Repository) GetRemoteURL(remoteName string) (string, error) {
 	remote, err := r.repo.Remote(remoteName)
 	if err != nil {
