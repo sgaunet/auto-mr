@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/go-github/v69/github"
 	"github.com/sgaunet/auto-mr/internal/logger"
+	"github.com/sgaunet/auto-mr/internal/timeutil"
 	"github.com/sgaunet/bullets"
 	"golang.org/x/oauth2"
 )
@@ -95,10 +96,10 @@ func (c *Client) WaitForWorkflows(timeout time.Duration) (string, error) {
 		totalDuration := time.Since(start)
 		if conclusion == conclusionSuccess {
 			c.display.Success("Workflows completed successfully - total time: " +
-				formatDuration(totalDuration))
+				timeutil.FormatDuration(totalDuration))
 		} else {
 			msg := "Workflows failed - total time: " +
-				formatDuration(totalDuration)
+				timeutil.FormatDuration(totalDuration)
 			handle := c.display.InfoHandle(msg)
 			handle.Error(msg)
 		}
@@ -106,7 +107,7 @@ func (c *Client) WaitForWorkflows(timeout time.Duration) (string, error) {
 	}
 
 	totalDuration := time.Since(start)
-	c.display.Error("Timeout after " + formatDuration(totalDuration))
+	c.display.Error("Timeout after " + timeutil.FormatDuration(totalDuration))
 	return "", errWorkflowTimeout
 }
 
@@ -194,18 +195,6 @@ func GetMergeMethod(squash bool) string {
 	return "merge"
 }
 
-// formatDuration formats a duration into a human-readable string.
-func formatDuration(d time.Duration) string {
-	d = d.Round(time.Second)
-	minutes := d / time.Minute
-	seconds := (d % time.Minute) / time.Second
-
-	if minutes > 0 {
-		return fmt.Sprintf("%dm %ds", minutes, seconds)
-	}
-	return fmt.Sprintf("%ds", seconds)
-}
-
 // formatJobStatus formats a job/check status with duration.
 // Returns a formatted string like "build (running, 1m 23s)" or "test (success, 45s)".
 // Icons are added by the bullets library methods (Success/Error/etc), not by this function.
@@ -242,11 +231,11 @@ func getJobStatusText(job *JobInfo) string {
 func calculateJobDuration(job *JobInfo) string {
 	if job.Status == statusCompleted && job.StartedAt != nil && job.CompletedAt != nil {
 		duration := job.CompletedAt.Sub(*job.StartedAt)
-		return formatDuration(duration)
+		return timeutil.FormatDuration(duration)
 	}
 	if job.Status == statusInProgress && job.StartedAt != nil {
 		elapsed := time.Since(*job.StartedAt)
-		return formatDuration(elapsed)
+		return timeutil.FormatDuration(elapsed)
 	}
 	return ""
 }

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/sgaunet/auto-mr/internal/timeutil"
 	"github.com/sgaunet/bullets"
 )
 
@@ -96,18 +97,6 @@ func (d *displayRenderer) Cleanup() {
 	d.activeHandles = make(map[int]*bullets.BulletHandle)
 }
 
-// formatDuration formats a duration into a human-readable string.
-func formatDuration(d time.Duration) string {
-	d = d.Round(time.Second)
-	minutes := d / time.Minute
-	seconds := (d % time.Minute) / time.Second
-
-	if minutes > 0 {
-		return fmt.Sprintf("%dm %ds", minutes, seconds)
-	}
-	return fmt.Sprintf("%ds", seconds)
-}
-
 // formatJobStatus formats a job status with duration.
 // Returns a formatted string like "build (running, 1m 23s)" or "test (success, 45s)".
 // Icons are added by the bullets library methods (Success/Error/etc), not by this function.
@@ -125,11 +114,11 @@ func formatJobStatus(job *Job) string {
 	// Calculate duration
 	var durationStr string
 	if job.Duration > 0 {
-		durationStr = formatDuration(time.Duration(job.Duration) * time.Second)
+		durationStr = timeutil.FormatDuration(time.Duration(job.Duration) * time.Second)
 	} else if job.StartedAt != nil && job.Status == statusRunning {
 		// Calculate elapsed time for running jobs
 		elapsed := time.Since(*job.StartedAt)
-		durationStr = formatDuration(elapsed)
+		durationStr = timeutil.FormatDuration(elapsed)
 	}
 
 	// Format the complete status string (without icon - bullets library adds those)
