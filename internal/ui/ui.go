@@ -85,3 +85,13 @@ type GitHubLabel struct {
 func (gh *GitHubLabel) GetName() string {
 	return gh.Name
 }
+
+// GenericLabel represents a platform-agnostic label.
+type GenericLabel struct {
+	Name string
+}
+
+// GetName returns the label name.
+func (g *GenericLabel) GetName() string {
+	return g.Name
+}
