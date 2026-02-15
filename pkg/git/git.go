@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
@@ -18,10 +19,10 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/transport/http"
 	"github.com/go-git/go-git/v5/plumbing/transport/ssh"
 	"github.com/sgaunet/auto-mr/internal/logger"
+	"github.com/sgaunet/auto-mr/internal/security"
 	"github.com/sgaunet/bullets"
 	gossh "golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
-	"time"
 )
 
 const (
@@ -195,20 +196,28 @@ func getAuth(repo *git.Repository, logger *bullets.Logger) (*authMethod, error) 
 // getHTTPSAuth returns HTTP authentication for HTTPS URLs.
 func getHTTPSAuth(url string, logger *bullets.Logger) (*authMethod, error) {
 	if strings.Contains(url, "gitlab.com") {
-		if token := os.Getenv("GITLAB_TOKEN"); token != "" {
-			logger.Debug("Using GitLab token authentication")
+		if tokenStr := os.Getenv("GITLAB_TOKEN"); tokenStr != "" {
+			token := security.NewSecureToken(tokenStr)
+			security.DebugAuth(logger, "GitLab", map[string]string{
+				"method": "token",
+				"url":    url,
+			})
 			return &authMethod{method: &http.BasicAuth{
 				Username: "oauth2",
-				Password: token,
+				Password: token.Value(), // Extract actual token only for authentication
 			}}, nil
 		}
 		logger.Debug("GITLAB_TOKEN not found")
 	} else if strings.Contains(url, "github.com") {
-		if token := os.Getenv("GITHUB_TOKEN"); token != "" {
-			logger.Debug("Using GitHub token authentication")
+		if tokenStr := os.Getenv("GITHUB_TOKEN"); tokenStr != "" {
+			token := security.NewSecureToken(tokenStr)
+			security.DebugAuth(logger, "GitHub", map[string]string{
+				"method": "token",
+				"url":    url,
+			})
 			return &authMethod{method: &http.BasicAuth{
 				Username: "x-access-token",
-				Password: token,
+				Password: token.Value(), // Extract actual token only for authentication
 			}}, nil
 		}
 		logger.Debug("GITHUB_TOKEN not found")
@@ -257,11 +266,12 @@ func setupSSHAuth(logger *bullets.Logger) (*authMethod, error) {
 	var sshAuth *ssh.PublicKeys
 	for _, keyFile := range keyFiles {
 		if _, err := os.Stat(keyFile); err == nil {
-			logger.Debug("Trying SSH key file: " + keyFile)
+			security.DebugSSHKey(logger, keyFile, false) // Log attempt with masked path
 			// #nosec G304 - Reading SSH keys from standard locations is intentional
 			sshAuth, err = ssh.NewPublicKeysFromFile("git", keyFile, "")
 			if err != nil {
-				logger.Debug(fmt.Sprintf("Failed to load SSH key %s: %v", keyFile, err))
+				sanitizedErr := security.SanitizeString(err.Error())
+				logger.Debug("Failed to load SSH key: " + sanitizedErr)
 				// Try next key file if this one fails
 				continue
 			}
@@ -270,7 +280,7 @@ func setupSSHAuth(logger *bullets.Logger) (*authMethod, error) {
 				sshAuth.HostKeyCallback = hostKeyCallback
 			}
 
-			logger.Debug("SSH authentication configured with key file: " + keyFile)
+			security.DebugSSHKey(logger, keyFile, true) // Log success with masked path
 			return &authMethod{method: sshAuth}, nil
 		}
 	}
@@ -415,7 +425,8 @@ func (r *Repository) SwitchBranch(ctx context.Context, branchName string) error 
 	}
 
 	if err != nil {
-		return fmt.Errorf("failed to switch branch: %w\nOutput: %s", err, string(output))
+		//nolint:wrapcheck // Error is sanitized to prevent token leakage
+		return security.SanitizeError(fmt.Errorf("failed to switch branch: %w\nOutput: %s", err, string(output)))
 	}
 
 	r.log.Debug("Branch switched successfully: " + branchName)
@@ -443,7 +454,8 @@ func (r *Repository) Pull(ctx context.Context) error {
 	}
 
 	if err != nil {
-		return fmt.Errorf("failed to pull: %w\nOutput: %s", err, string(output))
+		//nolint:wrapcheck // Error is sanitized to prevent token leakage
+		return security.SanitizeError(fmt.Errorf("failed to pull: %w\nOutput: %s", err, string(output)))
 	}
 
 	r.log.Debug("Pull completed successfully")
@@ -471,7 +483,8 @@ func (r *Repository) DeleteBranch(ctx context.Context, branchName string) error 
 	}
 
 	if err != nil {
-		return fmt.Errorf("failed to delete branch: %w\nOutput: %s", err, string(output))
+		//nolint:wrapcheck // Error is sanitized to prevent token leakage
+		return security.SanitizeError(fmt.Errorf("failed to delete branch: %w\nOutput: %s", err, string(output)))
 	}
 
 	r.log.Debug("Branch deleted successfully: " + branchName)
@@ -499,7 +512,8 @@ func (r *Repository) FetchAndPrune(ctx context.Context) error {
 	}
 
 	if err != nil {
-		return fmt.Errorf("failed to fetch and prune: %w\nOutput: %s", err, string(output))
+		//nolint:wrapcheck // Error is sanitized to prevent token leakage
+		return security.SanitizeError(fmt.Errorf("failed to fetch and prune: %w\nOutput: %s", err, string(output)))
 	}
 
 	r.log.Debug("Fetch and prune completed successfully")
