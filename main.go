@@ -11,17 +11,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/go-github/v69/github"
 	"github.com/sgaunet/auto-mr/internal/logger"
 	"github.com/sgaunet/auto-mr/internal/ui"
 	"github.com/sgaunet/auto-mr/pkg/commits"
 	"github.com/sgaunet/auto-mr/pkg/config"
 	"github.com/sgaunet/auto-mr/pkg/git"
-	ghclient "github.com/sgaunet/auto-mr/pkg/github"
-	"github.com/sgaunet/auto-mr/pkg/gitlab"
+	"github.com/sgaunet/auto-mr/pkg/platform"
 	"github.com/sgaunet/bullets"
 	"github.com/spf13/cobra"
-	gogitlab "gitlab.com/gitlab-org/api/client-go"
 )
 
 const (
@@ -31,13 +28,10 @@ const (
 )
 
 var (
-	errOnMainBranch        = errors.New("you are on the main branch. Please checkout to a feature branch")
-	errUnsupportedPlatform = errors.New("unsupported platform")
-	errPipelineFailed      = errors.New("pipeline failed")
-	errWorkflowFailed      = errors.New("workflow failed")
-	errTooManyLabels       = errors.New("too many labels specified")
-	errUnsupportedLabelType = errors.New("unsupported label type")
-	errLabelNotFound       = errors.New("label not found in repository")
+	errOnMainBranch  = errors.New("you are on the main branch. Please checkout to a feature branch")
+	errPipelineFailed = errors.New("pipeline failed")
+	errTooManyLabels  = errors.New("too many labels specified")
+	errLabelNotFound  = errors.New("label not found in repository")
 )
 
 var (
@@ -227,15 +221,15 @@ func runAutoMR(cmd *cobra.Command, useManualLabels bool, manualLabelsValue strin
 	}
 	repo.SetLogger(log)
 
-	platform, err := repo.DetectPlatform()
+	detectedPlatform, err := repo.DetectPlatform()
 	if err != nil {
 		return fmt.Errorf("failed to detect platform: %w", err)
 	}
-	log.Infof("Platform detected: %s", platform)
+	log.Infof("Platform detected: %s", detectedPlatform)
 
 	// Handle --list-labels flag (list and exit)
 	if listLabels {
-		return handleListLabels(platform, repo)
+		return handleListLabels(detectedPlatform, cfg, repo)
 	}
 
 	mainBranch, currentBranch, err := validateBranches(repo)
@@ -253,7 +247,7 @@ func runAutoMR(cmd *cobra.Command, useManualLabels bool, manualLabelsValue strin
 	}
 
 	return routeToPlatform(
-		cmd, platform, cfg, currentBranch, mainBranch, title, body, repo,
+		cmd, detectedPlatform, cfg, currentBranch, mainBranch, title, body, repo,
 		useManualLabels, manualLabelsValue,
 	)
 }
@@ -368,88 +362,197 @@ func handleInteractiveSelection(
 
 func routeToPlatform(
 	cmd *cobra.Command,
-	platform git.Platform,
+	detectedPlatform git.Platform,
 	cfg *config.Config,
 	currentBranch, mainBranch, title, body string,
 	repo *git.Repository,
 	useManualLabels bool,
 	manualLabelsValue string,
 ) error {
-	switch platform {
-	case git.PlatformGitLab:
-		return handleGitLab(cmd, cfg, currentBranch, mainBranch, title, body, repo, useManualLabels, manualLabelsValue)
-	case git.PlatformGitHub:
-		return handleGitHub(cmd, cfg, currentBranch, mainBranch, title, body, repo, useManualLabels, manualLabelsValue)
-	default:
-		return fmt.Errorf("%w: %s", errUnsupportedPlatform, platform)
+	provider, err := platform.NewProvider(detectedPlatform, cfg, log)
+	if err != nil {
+		return fmt.Errorf("failed to create platform client: %w", err)
 	}
-}
 
-func handleListLabels(platform git.Platform, repo *git.Repository) error {
 	remoteURL, err := repo.GetRemoteURL("origin")
 	if err != nil {
 		return fmt.Errorf("failed to get remote URL: %w", err)
 	}
 
-	switch platform {
-	case git.PlatformGitLab:
-		return listGitLabLabels(remoteURL)
-	case git.PlatformGitHub:
-		return listGitHubLabels(remoteURL)
-	default:
-		return fmt.Errorf("%w: %s", errUnsupportedPlatform, platform)
+	if err := provider.Initialize(remoteURL); err != nil {
+		return fmt.Errorf("failed to initialize %s client: %w", provider.PlatformName(), err)
 	}
+
+	return handlePlatform(cmd, provider, currentBranch, mainBranch, title, body, repo,
+		useManualLabels, manualLabelsValue)
 }
 
-func listGitLabLabels(remoteURL string) error {
-	client, err := gitlab.NewClient()
+func handlePlatform(
+	cmd *cobra.Command,
+	provider platform.Provider,
+	currentBranch, mainBranch, title, body string,
+	repo *git.Repository,
+	useManualLabels bool,
+	manualLabelsValue string,
+) error {
+	selectedLabels, err := selectLabels(provider, useManualLabels, manualLabelsValue)
 	if err != nil {
-		return fmt.Errorf("failed to create GitLab client: %w", err)
-	}
-	client.SetLogger(log)
-
-	if err := client.SetProjectFromURL(remoteURL); err != nil {
-		return fmt.Errorf("failed to set GitLab project: %w", err)
+		return err
 	}
 
-	labels, err := client.ListLabels()
+	mr, err := createMR(provider, currentBranch, mainBranch, title, body, selectedLabels, !noSquash)
+	if err != nil {
+		return err
+	}
+
+	if err := waitAndMerge(cmd, provider, mr, !noSquash, title); err != nil {
+		return err
+	}
+
+	ctx := context.Background()
+	return cleanup(ctx, repo, mainBranch, currentBranch)
+}
+
+func handleListLabels(detectedPlatform git.Platform, cfg *config.Config, repo *git.Repository) error {
+	provider, err := platform.NewProvider(detectedPlatform, cfg, log)
+	if err != nil {
+		return fmt.Errorf("failed to create platform client: %w", err)
+	}
+
+	remoteURL, err := repo.GetRemoteURL("origin")
+	if err != nil {
+		return fmt.Errorf("failed to get remote URL: %w", err)
+	}
+
+	if err := provider.Initialize(remoteURL); err != nil {
+		return fmt.Errorf("failed to initialize %s client: %w", provider.PlatformName(), err)
+	}
+
+	availableLabels, err := provider.ListLabels()
 	if err != nil {
 		return fmt.Errorf("failed to list labels: %w", err)
 	}
 
-	fmt.Printf("Available labels for GitLab:%s:\n", remoteURL)
-	for _, label := range labels {
+	fmt.Printf("Available labels for %s:%s:\n", provider.PlatformName(), remoteURL)
+	for _, label := range availableLabels {
 		fmt.Printf("- %s\n", label.Name)
 	}
-	fmt.Printf("\nTotal: %d labels\n", len(labels))
+	fmt.Printf("\nTotal: %d labels\n", len(availableLabels))
 	return nil
 }
 
-func listGitHubLabels(remoteURL string) error {
-	client, err := ghclient.NewClient()
+func selectLabels(provider platform.Provider, useManualSelection bool, manualLabels string) ([]string, error) {
+	availableLabels, err := provider.ListLabels()
 	if err != nil {
-		return fmt.Errorf("failed to create GitHub client: %w", err)
-	}
-	client.SetLogger(log)
-
-	if err := client.SetRepositoryFromURL(remoteURL); err != nil {
-		return fmt.Errorf("failed to set GitHub repository: %w", err)
+		return nil, fmt.Errorf("failed to list labels: %w", err)
 	}
 
-	labels, err := client.ListLabels()
+	if useManualSelection {
+		log.Debug("Using manual label selection via --labels flag")
+		return validateManualLabels(availableLabels, manualLabels)
+	}
+
+	// Interactive selection
+	log.Debug("Using interactive label selection")
+	labelSelector := ui.NewLabelSelector()
+	labelSelector.SetLogger(log)
+	labelInterfaces := make([]ui.Label, len(availableLabels))
+	for i, label := range availableLabels {
+		labelInterfaces[i] = &ui.GenericLabel{Name: label.Name}
+	}
+
+	selectedLabels, err := labelSelector.SelectLabels(labelInterfaces, maxLabelsToSelect)
 	if err != nil {
-		return fmt.Errorf("failed to list labels: %w", err)
+		return nil, fmt.Errorf("failed to select labels: %w", err)
 	}
 
-	fmt.Printf("Available labels for GitHub:%s:\n", remoteURL)
-	for _, label := range labels {
-		fmt.Printf("- %s\n", label.Name)
+	return selectedLabels, nil
+}
+
+func createMR(
+	provider platform.Provider,
+	currentBranch, mainBranch, title, body string,
+	selectedLabels []string,
+	squash bool,
+) (*platform.MergeRequest, error) {
+	log.IncreasePadding()
+	log.Infof("Creating %s merge/pull request...", provider.PlatformName())
+
+	mr, err := provider.Create(platform.CreateParams{
+		SourceBranch: currentBranch,
+		TargetBranch: mainBranch,
+		Title:        title,
+		Body:         body,
+		Labels:       selectedLabels,
+		Squash:       squash,
+	})
+	if err != nil {
+		if errors.Is(err, platform.ErrAlreadyExists) {
+			log.Warnf("Merge/pull request already exists for branch: %s", currentBranch)
+			existingMR, fetchErr := provider.GetByBranch(currentBranch, mainBranch)
+			if fetchErr != nil {
+				return nil, fmt.Errorf("failed to fetch existing merge/pull request: %w", fetchErr)
+			}
+			log.Infof("Using existing merge/pull request: %s", existingMR.WebURL)
+			log.DecreasePadding()
+			return existingMR, nil
+		}
+		log.DecreasePadding()
+		return nil, fmt.Errorf("failed to create merge/pull request: %w", err)
 	}
-	fmt.Printf("\nTotal: %d labels\n", len(labels))
+
+	log.Infof("Merge/pull request created: %s", mr.WebURL)
+	log.DecreasePadding()
+	return mr, nil
+}
+
+func waitAndMerge(
+	cmd *cobra.Command,
+	provider platform.Provider,
+	mr *platform.MergeRequest,
+	squash bool,
+	commitTitle string,
+) error {
+	time.Sleep(pipelineStartupDelay)
+
+	timeout, err := getPipelineTimeout(cmd, provider.PipelineTimeout())
+	if err != nil {
+		return err
+	}
+
+	status, err := provider.WaitForPipeline(timeout)
+	if err != nil {
+		return fmt.Errorf("failed to wait for pipeline: %w", err)
+	}
+
+	if status != "success" && status != "" {
+		return fmt.Errorf("%w with status: %s", errPipelineFailed, status)
+	}
+
+	log.Infof("Merging %s merge/pull request...", provider.PlatformName())
+	log.IncreasePadding()
+
+	log.Info("Approving merge/pull request...")
+	if err := provider.Approve(mr.ID); err != nil {
+		log.Warnf("Failed to approve merge/pull request: %v", err)
+	}
+
+	if err := provider.Merge(platform.MergeParams{
+		MRID:         mr.ID,
+		Squash:       squash,
+		CommitTitle:  commitTitle,
+		SourceBranch: mr.SourceBranch,
+	}); err != nil {
+		log.DecreasePadding()
+		return fmt.Errorf("failed to merge: %w", err)
+	}
+
+	log.Info("Merge/pull request merged successfully")
+	log.DecreasePadding()
 	return nil
 }
 
-func validateManualLabels(availableLabels any, requestedLabels string) ([]string, error) {
+func validateManualLabels(availableLabels []platform.Label, requestedLabels string) ([]string, error) {
 	// Handle empty string case (skip labels)
 	if requestedLabels == "" {
 		return []string{}, nil
@@ -464,9 +567,9 @@ func validateManualLabels(availableLabels any, requestedLabels string) ([]string
 	}
 
 	// Build map of available labels for O(1) lookup
-	availableMap, err := buildLabelMap(availableLabels)
-	if err != nil {
-		return nil, err
+	availableMap := make(map[string]bool, len(availableLabels))
+	for _, label := range availableLabels {
+		availableMap[label.Name] = true
 	}
 
 	// Check each requested label exists
@@ -489,340 +592,6 @@ func parseLabels(requestedLabels string) []string {
 		}
 	}
 	return cleanedLabels
-}
-
-func buildLabelMap(availableLabels any) (map[string]bool, error) {
-	availableMap := make(map[string]bool)
-	switch labels := availableLabels.(type) {
-	case []gitlab.Label:
-		for _, label := range labels {
-			availableMap[label.Name] = true
-		}
-	case []ghclient.Label:
-		for _, label := range labels {
-			availableMap[label.Name] = true
-		}
-	default:
-		return nil, errUnsupportedLabelType
-	}
-	return availableMap, nil
-}
-
-func handleGitLab(
-	cmd *cobra.Command,
-	cfg *config.Config,
-	currentBranch, mainBranch, title, body string,
-	repo *git.Repository,
-	useManualLabels bool,
-	manualLabelsValue string,
-) error {
-	client, err := initializeGitLabClient(repo)
-	if err != nil {
-		return err
-	}
-
-	selectedLabels, err := selectGitLabLabels(client, useManualLabels, manualLabelsValue)
-	if err != nil {
-		return err
-	}
-
-	mr, err := createGitLabMR(client, cfg, currentBranch, mainBranch, title, body, selectedLabels, !noSquash)
-	if err != nil {
-		return err
-	}
-
-	if err := waitAndMergeGitLabMR(cmd, cfg, client, mr, !noSquash, title); err != nil {
-		return err
-	}
-
-	ctx := context.Background()
-	return cleanup(ctx, repo, mainBranch, currentBranch)
-}
-
-func initializeGitLabClient(repo *git.Repository) (*gitlab.Client, error) {
-	client, err := gitlab.NewClient()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create GitLab client: %w", err)
-	}
-	client.SetLogger(log)
-
-	remoteURL, err := repo.GetRemoteURL("origin")
-	if err != nil {
-		return nil, fmt.Errorf("failed to get remote URL: %w", err)
-	}
-
-	if err := client.SetProjectFromURL(remoteURL); err != nil {
-		return nil, fmt.Errorf("failed to set GitLab project: %w", err)
-	}
-
-	return client, nil
-}
-
-func selectGitLabLabels(client *gitlab.Client, useManualSelection bool, manualLabels string) ([]string, error) {
-	// Fetch available labels from API
-	availableLabels, err := client.ListLabels()
-	if err != nil {
-		return nil, fmt.Errorf("failed to list labels: %w", err)
-	}
-
-	// Check if manual selection via flag (Tier 1)
-	if useManualSelection {
-		log.Debug("Using manual label selection via --labels flag")
-		return validateManualLabels(availableLabels, manualLabels)
-	}
-
-	// Interactive selection (Tier 2 - existing behavior)
-	log.Debug("Using interactive label selection")
-	labelSelector := ui.NewLabelSelector()
-	labelSelector.SetLogger(log)
-	labelInterfaces := make([]ui.Label, len(availableLabels))
-	for i, label := range availableLabels {
-		labelInterfaces[i] = &ui.GitLabLabel{Name: label.Name}
-	}
-
-	selectedLabels, err := labelSelector.SelectLabels(labelInterfaces, maxLabelsToSelect)
-	if err != nil {
-		return nil, fmt.Errorf("failed to select labels: %w", err)
-	}
-
-	return selectedLabels, nil
-}
-
-func createGitLabMR(
-	client *gitlab.Client,
-	cfg *config.Config,
-	currentBranch, mainBranch, title, body string,
-	labels []string,
-	squash bool,
-) (*gogitlab.MergeRequest, error) {
-	log.IncreasePadding()
-	log.Info("Creating merge request...")
-	mr, err := client.CreateMergeRequest(
-		currentBranch, mainBranch, title, body,
-		cfg.GitLab.Assignee, cfg.GitLab.Reviewer, labels, squash,
-	)
-	if err != nil {
-		// Check if error is about MR already existing using typed error
-		if errors.Is(err, gitlab.ErrMRAlreadyExists) {
-			log.Warnf("Merge request already exists for branch: %s", currentBranch)
-			// Fetch the existing MR
-			existingMR, fetchErr := client.GetMergeRequestByBranch(currentBranch, mainBranch)
-			if fetchErr != nil {
-				return nil, fmt.Errorf("failed to fetch existing merge request: %w", fetchErr)
-			}
-			log.Infof("Using existing merge request: %s", existingMR.WebURL)
-			return existingMR, nil
-		}
-		log.DecreasePadding()
-		return nil, fmt.Errorf("failed to create merge request: %w", err)
-	}
-
-	log.Infof("Merge request created: %s", mr.WebURL)
-	log.DecreasePadding()
-	return mr, nil
-}
-
-func waitAndMergeGitLabMR(
-	cmd *cobra.Command,
-	cfg *config.Config,
-	client *gitlab.Client,
-	mr *gogitlab.MergeRequest,
-	squash bool,
-	commitTitle string,
-) error {
-	time.Sleep(pipelineStartupDelay)
-
-	timeout, err := getPipelineTimeout(cmd, cfg.GitLab.PipelineTimeout)
-	if err != nil {
-		return err
-	}
-
-	status, err := client.WaitForPipeline(timeout)
-	if err != nil {
-		return fmt.Errorf("failed to wait for pipeline: %w", err)
-	}
-
-	if status != "success" && status != "" {
-		return fmt.Errorf("%w with status: %s", errPipelineFailed, status)
-	}
-
-	log.Info("Merging merge request...")
-	log.IncreasePadding()
-
-	log.Info("Approving merge request...")
-	if err := client.ApproveMergeRequest(mr.IID); err != nil {
-		log.Warnf("Failed to approve merge request: %v", err)
-	}
-
-	if err := client.MergeMergeRequest(mr.IID, squash, commitTitle); err != nil {
-		log.DecreasePadding()
-		return fmt.Errorf("failed to merge MR: %w", err)
-	}
-
-	log.Info("Merge request merged successfully")
-	log.DecreasePadding()
-	return nil
-}
-
-func handleGitHub(
-	cmd *cobra.Command,
-	cfg *config.Config,
-	currentBranch, mainBranch, title, body string,
-	repo *git.Repository,
-	useManualLabels bool,
-	manualLabelsValue string,
-) error {
-	client, err := initializeGitHubClient(repo)
-	if err != nil {
-		return err
-	}
-
-	selectedLabels, err := selectGitHubLabels(client, useManualLabels, manualLabelsValue)
-	if err != nil {
-		return err
-	}
-
-	pr, err := createGitHubPR(client, cfg, currentBranch, mainBranch, title, body, selectedLabels)
-	if err != nil {
-		return err
-	}
-
-	if err := waitAndMergeGitHubPR(cmd, cfg, client, pr, title, !noSquash); err != nil {
-		return err
-	}
-
-	ctx := context.Background()
-	return cleanup(ctx, repo, mainBranch, currentBranch)
-}
-
-func initializeGitHubClient(repo *git.Repository) (*ghclient.Client, error) {
-	client, err := ghclient.NewClient()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create GitHub client: %w", err)
-	}
-	client.SetLogger(log)
-
-	remoteURL, err := repo.GetRemoteURL("origin")
-	if err != nil {
-		return nil, fmt.Errorf("failed to get remote URL: %w", err)
-	}
-
-	if err := client.SetRepositoryFromURL(remoteURL); err != nil {
-		return nil, fmt.Errorf("failed to set GitHub repository: %w", err)
-	}
-
-	return client, nil
-}
-
-func selectGitHubLabels(client *ghclient.Client, useManualSelection bool, manualLabels string) ([]string, error) {
-	// Fetch available labels from API
-	availableLabels, err := client.ListLabels()
-	if err != nil {
-		return nil, fmt.Errorf("failed to list labels: %w", err)
-	}
-
-	// Check if manual selection via flag (Tier 1)
-	if useManualSelection {
-		log.Debug("Using manual label selection via --labels flag")
-		return validateManualLabels(availableLabels, manualLabels)
-	}
-
-	// Interactive selection (Tier 2 - existing behavior)
-	log.Debug("Using interactive label selection")
-	labelSelector := ui.NewLabelSelector()
-	labelSelector.SetLogger(log)
-	labelInterfaces := make([]ui.Label, len(availableLabels))
-	for i, label := range availableLabels {
-		labelInterfaces[i] = &ui.GitHubLabel{Name: label.Name}
-	}
-
-	selectedLabels, err := labelSelector.SelectLabels(labelInterfaces, maxLabelsToSelect)
-	if err != nil {
-		return nil, fmt.Errorf("failed to select labels: %w", err)
-	}
-
-	return selectedLabels, nil
-}
-
-func createGitHubPR(
-	client *ghclient.Client,
-	cfg *config.Config,
-	currentBranch, mainBranch, title, body string,
-	labels []string,
-) (*github.PullRequest, error) {
-	log.IncreasePadding()
-	log.Info("Creating pull request...")
-	pr, err := client.CreatePullRequest(
-		currentBranch, mainBranch, title, body,
-		[]string{cfg.GitHub.Assignee},
-		[]string{cfg.GitHub.Reviewer},
-		labels,
-	)
-	if err != nil {
-		// Check if error is about PR already existing using typed error
-		if errors.Is(err, ghclient.ErrPRAlreadyExists) {
-			log.Warnf("Pull request already exists for branch: %s", currentBranch)
-			// Fetch the existing PR
-			existingPR, fetchErr := client.GetPullRequestByBranch(currentBranch, mainBranch)
-			if fetchErr != nil {
-				return nil, fmt.Errorf("failed to fetch existing pull request: %w", fetchErr)
-			}
-			log.Infof("Using existing pull request: %s", *existingPR.HTMLURL)
-			return existingPR, nil
-		}
-		log.DecreasePadding()
-		return nil, fmt.Errorf("failed to create pull request: %w", err)
-	}
-
-	log.Infof("Pull request created: %s", *pr.HTMLURL)
-	log.DecreasePadding()
-	return pr, nil
-}
-
-func waitAndMergeGitHubPR(
-	cmd *cobra.Command,
-	cfg *config.Config,
-	client *ghclient.Client,
-	pr *github.PullRequest,
-	commitTitle string,
-	squash bool,
-) error {
-	time.Sleep(pipelineStartupDelay)
-
-	timeout, err := getPipelineTimeout(cmd, cfg.GitHub.PipelineTimeout)
-	if err != nil {
-		return err
-	}
-
-	conclusion, err := client.WaitForWorkflows(timeout)
-	if err != nil {
-		return fmt.Errorf("failed to wait for workflows: %w", err)
-	}
-
-	if conclusion != "success" && conclusion != "" {
-		return fmt.Errorf("%w with conclusion: %s", errWorkflowFailed, conclusion)
-	}
-
-	log.Info("Merging pull request...")
-	log.IncreasePadding()
-
-	mergeMethod := ghclient.GetMergeMethod(squash)
-	if err := client.MergePullRequest(*pr.Number, mergeMethod, commitTitle); err != nil {
-		log.DecreasePadding()
-		return fmt.Errorf("failed to merge pull request: %w", err)
-	}
-
-	log.Info("Pull request merged successfully")
-
-	// Delete remote branch after successful merge (matching shell script behavior)
-	log.Infof("Deleting remote branch: %s", *pr.Head.Ref)
-	if err := client.DeleteBranch(*pr.Head.Ref); err != nil {
-		log.Warnf("Failed to delete remote branch: %v", err)
-		// Don't fail the entire operation if branch deletion fails
-	}
-
-	log.DecreasePadding()
-	return nil
 }
 
 func cleanup(ctx context.Context, repo *git.Repository, mainBranch, currentBranch string) error {
