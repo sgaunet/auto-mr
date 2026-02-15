@@ -2,6 +2,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -460,7 +461,8 @@ func handleGitLab(
 		return err
 	}
 
-	return cleanup(repo, mainBranch, currentBranch)
+	ctx := context.Background()
+	return cleanup(ctx, repo, mainBranch, currentBranch)
 }
 
 func initializeGitLabClient(repo *git.Repository) (*gitlab.Client, error) {
@@ -602,7 +604,8 @@ func handleGitHub(
 		return err
 	}
 
-	return cleanup(repo, mainBranch, currentBranch)
+	ctx := context.Background()
+	return cleanup(ctx, repo, mainBranch, currentBranch)
 }
 
 func initializeGitHubClient(repo *git.Repository) (*ghclient.Client, error) {
@@ -728,13 +731,13 @@ func waitAndMergeGitHubPR(
 	return nil
 }
 
-func cleanup(repo *git.Repository, mainBranch, currentBranch string) error {
+func cleanup(ctx context.Context, repo *git.Repository, mainBranch, currentBranch string) error {
 	log.Info("Cleanup...")
 	log.IncreasePadding()
 	defer log.DecreasePadding()
 
 	log.Infof("Switching to main branch: %s", mainBranch)
-	report := repo.Cleanup(mainBranch, currentBranch)
+	report := repo.Cleanup(ctx, mainBranch, currentBranch)
 
 	// Display results with status icons
 	displayCleanupStatus(report)

@@ -1,6 +1,9 @@
 package git
 
-import "fmt"
+import (
+	"context"
+	"fmt"
+)
 
 // CleanupReport tracks the state of each cleanup operation.
 type CleanupReport struct {
@@ -55,14 +58,14 @@ func (r *CleanupReport) FirstError() error {
 //
 // The hybrid approach ensures that git state is valid (critical operations) while
 // allowing recovery from network issues or minor failures (best-effort operations).
-func (r *Repository) Cleanup(mainBranch, currentBranch string) *CleanupReport {
+func (r *Repository) Cleanup(ctx context.Context, mainBranch, currentBranch string) *CleanupReport {
 	report := &CleanupReport{
 		MainBranch: mainBranch,
 		BranchName: currentBranch,
 	}
 
 	// Step 1: Switch to main branch (CRITICAL - fail-fast)
-	if err := r.SwitchBranch(mainBranch); err != nil {
+	if err := r.SwitchBranch(ctx, mainBranch); err != nil {
 		report.SwitchError = fmt.Errorf(
 			"failed to switch to main branch: %w\n\n"+
 				"If you have local changes that conflict, please handle them manually:\n"+
@@ -75,7 +78,7 @@ func (r *Repository) Cleanup(mainBranch, currentBranch string) *CleanupReport {
 	report.SwitchedBranch = true
 
 	// Step 2: Pull latest changes (CRITICAL - fail-fast)
-	if err := r.Pull(); err != nil {
+	if err := r.Pull(ctx); err != nil {
 		report.PullError = fmt.Errorf(
 			"failed to pull changes: %w\n\n"+
 				"Please resolve any conflicts manually and run: git pull",
@@ -85,7 +88,7 @@ func (r *Repository) Cleanup(mainBranch, currentBranch string) *CleanupReport {
 	report.PulledChanges = true
 
 	// Step 3: Fetch and prune (BEST-EFFORT - continue on error)
-	if err := r.FetchAndPrune(); err != nil {
+	if err := r.FetchAndPrune(ctx); err != nil {
 		report.PruneError = fmt.Errorf(
 			"failed to fetch and prune: %w\n\n"+
 				"You can manually run: git fetch --prune",
@@ -96,7 +99,7 @@ func (r *Repository) Cleanup(mainBranch, currentBranch string) *CleanupReport {
 	}
 
 	// Step 4: Delete feature branch (BEST-EFFORT - continue on error)
-	if err := r.DeleteBranch(currentBranch); err != nil {
+	if err := r.DeleteBranch(ctx, currentBranch); err != nil {
 		report.DeleteError = fmt.Errorf(
 			"failed to delete branch: %w\n\n"+
 				"You can manually delete it with: git branch -D %s",
