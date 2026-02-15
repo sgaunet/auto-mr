@@ -2,10 +2,214 @@ package config_test
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/sgaunet/auto-mr/pkg/config"
 )
+
+// YAML fixtures for Load() tests.
+const (
+	validConfigYAML = `
+gitlab:
+  assignee: john-doe
+  reviewer: jane-smith
+github:
+  assignee: bob-jones
+  reviewer: alice-wilson
+`
+
+	validConfigWithWhitespace = `
+gitlab:
+  assignee: "  john-doe  "
+  reviewer: "  jane-smith  "
+github:
+  assignee: "  bob-jones  "
+  reviewer: "  alice-wilson  "
+`
+
+	validMinimalUsernames = `
+gitlab:
+  assignee: a
+  reviewer: b
+github:
+  assignee: c
+  reviewer: d
+`
+
+	validMaxLengthUsernames = `
+gitlab:
+  assignee: abcdefghijklmnopqrstuvwxyz1234567890123
+  reviewer: zyxwvutsrqponmlkjihgfedcba9876543210987
+github:
+  assignee: ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890123
+  reviewer: ZYXWVUTSRQPONMLKJIHGFEDCBA9876543210987
+`
+
+	validConfigWithComments = `
+# Auto-MR Configuration File
+gitlab:
+  # GitLab user assignments
+  assignee: john-doe
+  reviewer: jane-smith
+github:
+  # GitHub user assignments
+  assignee: bob-jones
+  reviewer: alice-wilson
+`
+
+	malformedYAMLIndentation = `
+gitlab:
+assignee: john
+  reviewer: jane
+github:
+  assignee: bob
+  reviewer: alice
+`
+
+	malformedYAMLTabs = `
+gitlab:
+	assignee: john
+	reviewer: jane
+github:
+	assignee: bob
+	reviewer: alice
+`
+
+	malformedYAMLUnclosedQuote = `
+gitlab:
+  assignee: "john
+  reviewer: jane
+github:
+  assignee: bob
+  reviewer: alice
+`
+
+	emptyYAML = ``
+
+	whitespaceOnlyYAML = `
+
+
+`
+
+	configMissingGitLabAssignee = `
+gitlab:
+  assignee: ""
+  reviewer: jane-smith
+github:
+  assignee: bob-jones
+  reviewer: alice-wilson
+`
+
+	configMissingGitLabReviewer = `
+gitlab:
+  assignee: john-doe
+  reviewer: ""
+github:
+  assignee: bob-jones
+  reviewer: alice-wilson
+`
+
+	configMissingGitHubAssignee = `
+gitlab:
+  assignee: john-doe
+  reviewer: jane-smith
+github:
+  assignee: ""
+  reviewer: alice-wilson
+`
+
+	configMissingGitHubReviewer = `
+gitlab:
+  assignee: john-doe
+  reviewer: jane-smith
+github:
+  assignee: bob-jones
+  reviewer: ""
+`
+
+	configInvalidGitLabAssigneeFormat = `
+gitlab:
+  assignee: -invalid-start
+  reviewer: jane-smith
+github:
+  assignee: bob-jones
+  reviewer: alice-wilson
+`
+
+	configInvalidGitLabReviewerFormat = `
+gitlab:
+  assignee: john-doe
+  reviewer: invalid.period
+github:
+  assignee: bob-jones
+  reviewer: alice-wilson
+`
+
+	configInvalidGitHubAssigneeFormat = `
+gitlab:
+  assignee: john-doe
+  reviewer: jane-smith
+github:
+  assignee: bob@invalid
+  reviewer: alice-wilson
+`
+
+	configInvalidGitHubReviewerFormat = `
+gitlab:
+  assignee: john-doe
+  reviewer: jane-smith
+github:
+  assignee: bob-jones
+  reviewer: alice_
+`
+
+	configUsernameTooLong = `
+gitlab:
+  assignee: abcdefghijklmnopqrstuvwxyz12345678901234
+  reviewer: jane-smith
+github:
+  assignee: bob-jones
+  reviewer: alice-wilson
+`
+
+	configUnicodeCharacters = `
+gitlab:
+  assignee: user名前
+  reviewer: jane-smith
+github:
+  assignee: bob-jones
+  reviewer: alice-wilson
+`
+)
+
+// setupTestConfig creates a temporary home directory with a config file.
+// It uses t.TempDir() for automatic cleanup and t.Setenv() to redirect $HOME.
+func setupTestConfig(t *testing.T, configContent string) string {
+	t.Helper()
+
+	// Create temporary home directory (auto-cleaned after test)
+	tmpHome := t.TempDir()
+
+	// Set $HOME to temporary directory (auto-restored after test)
+	t.Setenv("HOME", tmpHome)
+
+	// Create config directory structure
+	configDir := filepath.Join(tmpHome, ".config", "auto-mr")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("Failed to create config directory: %v", err)
+	}
+
+	// Write config file
+	configPath := filepath.Join(configDir, "config.yml")
+	if err := os.WriteFile(configPath, []byte(configContent), 0o644); err != nil {
+		t.Fatalf("Failed to write config file: %v", err)
+	}
+
+	return configPath
+}
 
 // TestValidateGitLabAssignee tests GitLab assignee field validation.
 func TestValidateGitLabAssignee(t *testing.T) {
@@ -401,4 +605,455 @@ func TestAllFieldsValid(t *testing.T) {
 			}
 		})
 	}
+}
+
+// ========== Load() Function Tests ==========
+
+// TestLoad tests successful config loading scenarios.
+func TestLoad(t *testing.T) {
+	tests := []struct {
+		name           string
+		configYAML     string
+		expectedConfig config.Config
+	}{
+		{
+			name:       "valid standard config",
+			configYAML: validConfigYAML,
+			expectedConfig: config.Config{
+				GitLab: config.GitLabConfig{Assignee: "john-doe", Reviewer: "jane-smith"},
+				GitHub: config.GitHubConfig{Assignee: "bob-jones", Reviewer: "alice-wilson"},
+			},
+		},
+		{
+			name:       "config with whitespace (auto-trimmed)",
+			configYAML: validConfigWithWhitespace,
+			expectedConfig: config.Config{
+				GitLab: config.GitLabConfig{Assignee: "john-doe", Reviewer: "jane-smith"},
+				GitHub: config.GitHubConfig{Assignee: "bob-jones", Reviewer: "alice-wilson"},
+			},
+		},
+		{
+			name:       "minimal usernames (1 char)",
+			configYAML: validMinimalUsernames,
+			expectedConfig: config.Config{
+				GitLab: config.GitLabConfig{Assignee: "a", Reviewer: "b"},
+				GitHub: config.GitHubConfig{Assignee: "c", Reviewer: "d"},
+			},
+		},
+		{
+			name:       "maximum length usernames (39 chars)",
+			configYAML: validMaxLengthUsernames,
+			expectedConfig: config.Config{
+				GitLab: config.GitLabConfig{
+					Assignee: "abcdefghijklmnopqrstuvwxyz1234567890123",
+					Reviewer: "zyxwvutsrqponmlkjihgfedcba9876543210987",
+				},
+				GitHub: config.GitHubConfig{
+					Assignee: "ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890123",
+					Reviewer: "ZYXWVUTSRQPONMLKJIHGFEDCBA9876543210987",
+				},
+			},
+		},
+		{
+			name:       "config with comments",
+			configYAML: validConfigWithComments,
+			expectedConfig: config.Config{
+				GitLab: config.GitLabConfig{Assignee: "john-doe", Reviewer: "jane-smith"},
+				GitHub: config.GitHubConfig{Assignee: "bob-jones", Reviewer: "alice-wilson"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setupTestConfig(t, tt.configYAML)
+
+			cfg, err := config.Load()
+			if err != nil {
+				t.Fatalf("Expected Load() to succeed, got error: %v", err)
+			}
+
+			if cfg == nil {
+				t.Fatal("Expected config to be non-nil")
+			}
+
+			// Verify all fields match expected values
+			if cfg.GitLab.Assignee != tt.expectedConfig.GitLab.Assignee {
+				t.Errorf("GitLab.Assignee: expected '%s', got '%s'",
+					tt.expectedConfig.GitLab.Assignee, cfg.GitLab.Assignee)
+			}
+			if cfg.GitLab.Reviewer != tt.expectedConfig.GitLab.Reviewer {
+				t.Errorf("GitLab.Reviewer: expected '%s', got '%s'",
+					tt.expectedConfig.GitLab.Reviewer, cfg.GitLab.Reviewer)
+			}
+			if cfg.GitHub.Assignee != tt.expectedConfig.GitHub.Assignee {
+				t.Errorf("GitHub.Assignee: expected '%s', got '%s'",
+					tt.expectedConfig.GitHub.Assignee, cfg.GitHub.Assignee)
+			}
+			if cfg.GitHub.Reviewer != tt.expectedConfig.GitHub.Reviewer {
+				t.Errorf("GitHub.Reviewer: expected '%s', got '%s'",
+					tt.expectedConfig.GitHub.Reviewer, cfg.GitHub.Reviewer)
+			}
+		})
+	}
+}
+
+// TestLoadFileNotFound tests error handling when config file doesn't exist.
+func TestLoadFileNotFound(t *testing.T) {
+	tests := []struct {
+		name        string
+		setupFunc   func(*testing.T)
+		expectError bool
+	}{
+		{
+			name: "config file doesn't exist",
+			setupFunc: func(t *testing.T) {
+				t.Helper()
+				// Create temp home but no config file
+				tmpHome := t.TempDir()
+				t.Setenv("HOME", tmpHome)
+			},
+			expectError: true,
+		},
+		{
+			name: "config directory exists but file missing",
+			setupFunc: func(t *testing.T) {
+				t.Helper()
+				tmpHome := t.TempDir()
+				t.Setenv("HOME", tmpHome)
+				// Create directory but no file
+				configDir := filepath.Join(tmpHome, ".config", "auto-mr")
+				if err := os.MkdirAll(configDir, 0o755); err != nil {
+					t.Fatalf("Failed to create config directory: %v", err)
+				}
+			},
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.setupFunc(t)
+
+			cfg, err := config.Load()
+
+			if tt.expectError {
+				if err == nil {
+					t.Fatal("Expected error, got nil")
+				}
+				if !errors.Is(err, config.ErrConfigNotFound) {
+					t.Errorf("Expected ErrConfigNotFound, got: %v", err)
+				}
+				// Verify error message includes config path
+				if !strings.Contains(err.Error(), "config.yml") {
+					t.Errorf("Error should mention config file path: %v", err)
+				}
+				if cfg != nil {
+					t.Error("Expected nil config on error")
+				}
+			}
+		})
+	}
+}
+
+// TestLoadMalformedYAML tests error handling for malformed YAML files.
+func TestLoadMalformedYAML(t *testing.T) {
+	tests := []struct {
+		name       string
+		configYAML string
+	}{
+		{"incorrect indentation", malformedYAMLIndentation},
+		{"tabs instead of spaces", malformedYAMLTabs},
+		{"unclosed quotes", malformedYAMLUnclosedQuote},
+		{"empty file", emptyYAML},
+		{"only whitespace", whitespaceOnlyYAML},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setupTestConfig(t, tt.configYAML)
+
+			cfg, err := config.Load()
+			if err == nil {
+				t.Fatal("Expected error for malformed YAML, got nil")
+			}
+
+			// Verify error mentions parsing failure
+			if !strings.Contains(err.Error(), "failed to parse config file") &&
+				!strings.Contains(err.Error(), "invalid configuration") {
+				t.Errorf("Error should mention parsing or validation: %v", err)
+			}
+
+			if cfg != nil {
+				t.Error("Expected nil config on error")
+			}
+		})
+	}
+}
+
+// TestLoadValidationFailures tests that Load() calls Validate() and propagates errors.
+func TestLoadValidationFailures(t *testing.T) {
+	tests := []struct {
+		name          string
+		configYAML    string
+		expectedError error
+	}{
+		{
+			name:          "missing GitLab assignee",
+			configYAML:    configMissingGitLabAssignee,
+			expectedError: config.ErrGitLabAssigneeEmpty,
+		},
+		{
+			name:          "missing GitLab reviewer",
+			configYAML:    configMissingGitLabReviewer,
+			expectedError: config.ErrGitLabReviewerEmpty,
+		},
+		{
+			name:          "missing GitHub assignee",
+			configYAML:    configMissingGitHubAssignee,
+			expectedError: config.ErrGitHubAssigneeEmpty,
+		},
+		{
+			name:          "missing GitHub reviewer",
+			configYAML:    configMissingGitHubReviewer,
+			expectedError: config.ErrGitHubReviewerEmpty,
+		},
+		{
+			name:          "invalid GitLab assignee format (starts with hyphen)",
+			configYAML:    configInvalidGitLabAssigneeFormat,
+			expectedError: config.ErrGitLabAssigneeInvalid,
+		},
+		{
+			name:          "invalid GitLab reviewer format (contains period)",
+			configYAML:    configInvalidGitLabReviewerFormat,
+			expectedError: config.ErrGitLabReviewerInvalid,
+		},
+		{
+			name:          "invalid GitHub assignee format (contains @)",
+			configYAML:    configInvalidGitHubAssigneeFormat,
+			expectedError: config.ErrGitHubAssigneeInvalid,
+		},
+		{
+			name:          "invalid GitHub reviewer format (ends with underscore)",
+			configYAML:    configInvalidGitHubReviewerFormat,
+			expectedError: config.ErrGitHubReviewerInvalid,
+		},
+		{
+			name:          "username too long (40+ chars)",
+			configYAML:    configUsernameTooLong,
+			expectedError: config.ErrGitLabAssigneeInvalid,
+		},
+		{
+			name:          "unicode characters in username",
+			configYAML:    configUnicodeCharacters,
+			expectedError: config.ErrGitLabAssigneeInvalid,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setupTestConfig(t, tt.configYAML)
+
+			cfg, err := config.Load()
+			if err == nil {
+				t.Fatal("Expected validation error, got nil")
+			}
+
+			// Verify correct error type
+			if !errors.Is(err, tt.expectedError) {
+				t.Errorf("Expected error %v, got: %v", tt.expectedError, err)
+			}
+
+			// Verify error wrapping mentions validation
+			if !strings.Contains(err.Error(), "invalid configuration") {
+				t.Errorf("Error should be wrapped with 'invalid configuration': %v", err)
+			}
+
+			if cfg != nil {
+				t.Error("Expected nil config on validation error")
+			}
+		})
+	}
+}
+
+// TestLoadIntegration tests the complete Load() → Validate() workflow.
+func TestLoadIntegration(t *testing.T) {
+	tests := []struct {
+		name       string
+		configYAML string
+		wantError  bool
+		errorType  error
+	}{
+		{
+			name:       "complete successful workflow",
+			configYAML: validConfigYAML,
+			wantError:  false,
+		},
+		{
+			name:       "whitespace trimming integration",
+			configYAML: validConfigWithWhitespace,
+			wantError:  false,
+		},
+		{
+			name:       "file not found → error",
+			configYAML: "", // Don't create file
+			wantError:  true,
+			errorType:  config.ErrConfigNotFound,
+		},
+		{
+			name:       "malformed YAML → error",
+			configYAML: malformedYAMLUnclosedQuote,
+			wantError:  true,
+		},
+		{
+			name:       "validation failure → error",
+			configYAML: configMissingGitLabAssignee,
+			wantError:  true,
+			errorType:  config.ErrGitLabAssigneeEmpty,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.configYAML != "" {
+				setupTestConfig(t, tt.configYAML)
+			} else {
+				// For file not found test
+				tmpHome := t.TempDir()
+				t.Setenv("HOME", tmpHome)
+			}
+
+			cfg, err := config.Load()
+
+			if tt.wantError {
+				if err == nil {
+					t.Fatal("Expected error, got nil")
+				}
+				if tt.errorType != nil && !errors.Is(err, tt.errorType) {
+					t.Errorf("Expected error type %v, got: %v", tt.errorType, err)
+				}
+				if cfg != nil {
+					t.Error("Expected nil config on error")
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("Expected success, got error: %v", err)
+				}
+				if cfg == nil {
+					t.Fatal("Expected non-nil config")
+				}
+
+				// Verify idempotency: can call Validate() again
+				if err := cfg.Validate(); err != nil {
+					t.Errorf("Second Validate() call should succeed: %v", err)
+				}
+			}
+		})
+	}
+}
+
+// TestLoadEdgeCases tests boundary conditions and unusual scenarios.
+func TestLoadEdgeCases(t *testing.T) {
+	t.Run("config with extra YAML fields", func(t *testing.T) {
+		extraFieldsYAML := `
+gitlab:
+  assignee: john-doe
+  reviewer: jane-smith
+  extra_field: ignored
+github:
+  assignee: bob-jones
+  reviewer: alice-wilson
+  another_field: also_ignored
+unknown_section:
+  foo: bar
+`
+		setupTestConfig(t, extraFieldsYAML)
+
+		cfg, err := config.Load()
+		if err != nil {
+			t.Fatalf("Load should ignore extra fields, got error: %v", err)
+		}
+		if cfg == nil {
+			t.Fatal("Expected non-nil config")
+		}
+	})
+
+	t.Run("config with YAML anchors and aliases", func(t *testing.T) {
+		yamlWithAnchors := `
+gitlab:
+  assignee: &default_user john-doe
+  reviewer: *default_user
+github:
+  assignee: bob-jones
+  reviewer: alice-wilson
+`
+		setupTestConfig(t, yamlWithAnchors)
+
+		cfg, err := config.Load()
+		if err != nil {
+			t.Fatalf("Load should handle YAML anchors, got error: %v", err)
+		}
+		if cfg.GitLab.Assignee != "john-doe" || cfg.GitLab.Reviewer != "john-doe" {
+			t.Error("YAML anchor/alias not resolved correctly")
+		}
+	})
+
+	t.Run("verify Load respects $HOME environment variable", func(t *testing.T) {
+		tmpHome := t.TempDir()
+		t.Setenv("HOME", tmpHome)
+
+		// Load should fail since no config exists
+		_, err := config.Load()
+		if err == nil {
+			t.Fatal("Expected error for missing config")
+		}
+		if !errors.Is(err, config.ErrConfigNotFound) {
+			t.Errorf("Expected ErrConfigNotFound, got: %v", err)
+		}
+
+		// Verify error message includes the temp home path
+		if !strings.Contains(err.Error(), tmpHome) {
+			t.Errorf("Error should include temp home path %s: %v", tmpHome, err)
+		}
+	})
+
+	t.Run("config with only GitLab section (GitHub validation fails)", func(t *testing.T) {
+		onlyGitLabYAML := `
+gitlab:
+  assignee: john-doe
+  reviewer: jane-smith
+`
+		setupTestConfig(t, onlyGitLabYAML)
+
+		cfg, err := config.Load()
+		if err == nil {
+			t.Fatal("Expected validation error for missing GitHub section")
+		}
+		if !errors.Is(err, config.ErrGitHubAssigneeEmpty) {
+			t.Errorf("Expected ErrGitHubAssigneeEmpty, got: %v", err)
+		}
+		if cfg != nil {
+			t.Error("Expected nil config on validation error")
+		}
+	})
+
+	t.Run("config with only GitHub section (GitLab validation fails)", func(t *testing.T) {
+		onlyGitHubYAML := `
+github:
+  assignee: bob-jones
+  reviewer: alice-wilson
+`
+		setupTestConfig(t, onlyGitHubYAML)
+
+		cfg, err := config.Load()
+		if err == nil {
+			t.Fatal("Expected validation error for missing GitLab section")
+		}
+		if !errors.Is(err, config.ErrGitLabAssigneeEmpty) {
+			t.Errorf("Expected ErrGitLabAssigneeEmpty, got: %v", err)
+		}
+		if cfg != nil {
+			t.Error("Expected nil config on validation error")
+		}
+	})
 }
