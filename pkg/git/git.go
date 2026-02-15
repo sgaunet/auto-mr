@@ -21,6 +21,15 @@ import (
 	"github.com/sgaunet/bullets"
 	gossh "golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
+	"time"
+)
+
+const (
+	// localGitTimeout for local git operations (switch, delete).
+	localGitTimeout = 10 * time.Second
+
+	// networkGitTimeout for network git operations (pull, fetch).
+	networkGitTimeout = 2 * time.Minute
 )
 
 var (
@@ -32,6 +41,24 @@ var (
 	errNoSSHKeys           = errors.New("no SSH keys found in ~/.ssh")
 	errNotGitRepository    = errors.New("not a git repository (or any parent up to mount point)")
 )
+
+// GitTimeoutError wraps timeout errors with operation context.
+//
+//nolint:revive // Package-qualified name is intentional for clarity
+type GitTimeoutError struct {
+	Operation string
+	Timeout   time.Duration
+	Err       error
+}
+
+func (e *GitTimeoutError) Error() string {
+	return fmt.Sprintf("git %s operation timed out after %v: %v",
+		e.Operation, e.Timeout, e.Err)
+}
+
+func (e *GitTimeoutError) Unwrap() error {
+	return e.Err
+}
 
 // noAuthMethod represents no authentication (returns nil).
 type noAuthMethod struct{}
@@ -367,15 +394,26 @@ func (r *Repository) PushBranch(branchName string) error {
 // SwitchBranch switches to the specified branch using native git command.
 // This will fail if there are local changes that would conflict with the switch,
 // forcing the user to handle conflicts manually (matching auto-mr.sh behavior).
-func (r *Repository) SwitchBranch(branchName string) error {
+func (r *Repository) SwitchBranch(ctx context.Context, branchName string) error {
 	r.log.Debug("Switching to branch using git switch: " + branchName)
 
 	// Use native git switch command to match shell script behavior
 	// This preserves untracked files and fails on conflicts (desired behavior)
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(ctx, localGitTimeout)
+	defer cancel()
+
 	cmd := exec.CommandContext(ctx, "git", "switch", branchName)
 	cmd.Dir = r.gitRoot // Set working directory to git root
 	output, err := cmd.CombinedOutput()
+
+	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return &GitTimeoutError{
+			Operation: "switch",
+			Timeout:   localGitTimeout,
+			Err:       err,
+		}
+	}
+
 	if err != nil {
 		return fmt.Errorf("failed to switch branch: %w\nOutput: %s", err, string(output))
 	}
@@ -385,14 +423,25 @@ func (r *Repository) SwitchBranch(branchName string) error {
 }
 
 // Pull fetches and merges changes from the remote tracking branch using native git command.
-func (r *Repository) Pull() error {
+func (r *Repository) Pull(ctx context.Context) error {
 	r.log.Debug("Pulling changes using git pull")
 
 	// Use native git pull command to match shell script behavior
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(ctx, networkGitTimeout)
+	defer cancel()
+
 	cmd := exec.CommandContext(ctx, "git", "pull")
 	cmd.Dir = r.gitRoot // Set working directory to git root
 	output, err := cmd.CombinedOutput()
+
+	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return &GitTimeoutError{
+			Operation: "pull",
+			Timeout:   networkGitTimeout,
+			Err:       err,
+		}
+	}
+
 	if err != nil {
 		return fmt.Errorf("failed to pull: %w\nOutput: %s", err, string(output))
 	}
@@ -402,14 +451,25 @@ func (r *Repository) Pull() error {
 }
 
 // DeleteBranch force-deletes the specified local branch using native git command.
-func (r *Repository) DeleteBranch(branchName string) error {
+func (r *Repository) DeleteBranch(ctx context.Context, branchName string) error {
 	r.log.Debug("Deleting branch using git branch -D: " + branchName)
 
 	// Use native git branch -D to force delete (matching shell script behavior)
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(ctx, localGitTimeout)
+	defer cancel()
+
 	cmd := exec.CommandContext(ctx, "git", "branch", "-D", branchName)
 	cmd.Dir = r.gitRoot // Set working directory to git root
 	output, err := cmd.CombinedOutput()
+
+	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return &GitTimeoutError{
+			Operation: "delete branch",
+			Timeout:   localGitTimeout,
+			Err:       err,
+		}
+	}
+
 	if err != nil {
 		return fmt.Errorf("failed to delete branch: %w\nOutput: %s", err, string(output))
 	}
@@ -419,14 +479,25 @@ func (r *Repository) DeleteBranch(branchName string) error {
 }
 
 // FetchAndPrune fetches from origin and prunes deleted remote branches using native git command.
-func (r *Repository) FetchAndPrune() error {
+func (r *Repository) FetchAndPrune(ctx context.Context) error {
 	r.log.Debug("Fetching and pruning using git fetch --prune")
 
 	// Use native git fetch --prune to match shell script behavior
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(ctx, networkGitTimeout)
+	defer cancel()
+
 	cmd := exec.CommandContext(ctx, "git", "fetch", "--prune")
 	cmd.Dir = r.gitRoot // Set working directory to git root
 	output, err := cmd.CombinedOutput()
+
+	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return &GitTimeoutError{
+			Operation: "fetch and prune",
+			Timeout:   networkGitTimeout,
+			Err:       err,
+		}
+	}
+
 	if err != nil {
 		return fmt.Errorf("failed to fetch and prune: %w\nOutput: %s", err, string(output))
 	}
