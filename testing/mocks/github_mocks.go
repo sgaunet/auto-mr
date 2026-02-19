@@ -267,7 +267,7 @@ func (m *MockDisplayRenderer) String() string {
 	defer m.mu.Unlock()
 	var result strings.Builder
 	for i, msg := range m.messages {
-		result.WriteString(fmt.Sprintf("[%d] %s: %s\n", i, msg.Level, msg.Message))
+		fmt.Fprintf(&result, "[%d] %s: %s\n", i, msg.Level, msg.Message)
 	}
 	return result.String()
 }
