@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
+	autolabels "github.com/sgaunet/auto-mr/internal/labels"
 	"github.com/sgaunet/auto-mr/internal/logger"
-	"github.com/sgaunet/auto-mr/internal/ui"
 	"github.com/sgaunet/auto-mr/pkg/commits"
 	"github.com/sgaunet/auto-mr/pkg/config"
 	"github.com/sgaunet/auto-mr/pkg/git"
@@ -395,7 +395,7 @@ func handlePlatform(
 	useManualLabels bool,
 	manualLabelsValue string,
 ) error {
-	selectedLabels, err := selectLabels(provider, useManualLabels, manualLabelsValue)
+	selectedLabels, err := selectLabels(provider, useManualLabels, manualLabelsValue, title)
 	if err != nil {
 		return err
 	}
@@ -441,7 +441,9 @@ func handleListLabels(detectedPlatform git.Platform, cfg *config.Config, repo *g
 	return nil
 }
 
-func selectLabels(provider platform.Provider, useManualSelection bool, manualLabels string) ([]string, error) {
+func selectLabels(
+	provider platform.Provider, useManualSelection bool, manualLabels string, title string,
+) ([]string, error) {
 	availableLabels, err := provider.ListLabels()
 	if err != nil {
 		return nil, fmt.Errorf("failed to list labels: %w", err)
@@ -452,21 +454,21 @@ func selectLabels(provider platform.Provider, useManualSelection bool, manualLab
 		return validateManualLabels(availableLabels, manualLabels)
 	}
 
-	// Interactive selection
-	log.Debug("Using interactive label selection")
-	labelSelector := ui.NewLabelSelector()
-	labelSelector.SetLogger(log)
-	labelInterfaces := make([]ui.Label, len(availableLabels))
+	// Automatic selection based on conventional commit type
+	log.Debug("Using automatic label selection from commit type")
+	availableNames := make([]string, len(availableLabels))
 	for i, label := range availableLabels {
-		labelInterfaces[i] = &ui.GenericLabel{Name: label.Name}
+		availableNames[i] = label.Name
 	}
 
-	selectedLabels, err := labelSelector.SelectLabels(labelInterfaces, maxLabelsToSelect)
-	if err != nil {
-		return nil, fmt.Errorf("failed to select labels: %w", err)
+	selected := autolabels.AutoSelectLabels(title, availableNames)
+	if len(selected) > 0 {
+		log.Infof("Auto-selected labels: %v", selected)
+	} else {
+		log.Debug("No labels matched commit type, proceeding without labels")
 	}
 
-	return selectedLabels, nil
+	return selected, nil
 }
 
 func createMR(
