@@ -149,6 +149,7 @@ func findGitRoot(startPath string) (string, error) {
 // OpenRepository opens a git repository at the given path.
 // It searches upward from path to find the .git directory and configures
 // authentication automatically based on the remote URL.
+// Supports both regular repositories and linked worktrees (where .git is a file).
 //
 // Parameters:
 //   - path: any path within the git repository (absolute or relative)
@@ -163,8 +164,10 @@ func OpenRepository(path string) (*Repository, error) {
 		return nil, fmt.Errorf("failed to locate git repository: %w", err)
 	}
 
-	// Open repository using found root
-	repo, err := git.PlainOpen(gitRoot)
+	// Open repository using found root (EnableDotGitCommonDir supports linked worktrees)
+	repo, err := git.PlainOpenWithOptions(gitRoot, &git.PlainOpenOptions{
+		EnableDotGitCommonDir: true,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to open git repository: %w", err)
 	}
