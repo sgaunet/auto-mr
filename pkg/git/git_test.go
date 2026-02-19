@@ -2,11 +2,16 @@ package git_test
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
+	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/sgaunet/auto-mr/pkg/git"
 )
 
@@ -119,7 +124,7 @@ func TestFindGitRoot_WithGitFile(t *testing.T) {
 		t.Fatalf("Failed to create .git file: %v", err)
 	}
 
-	// Note: OpenRepository will fail because go-git can't parse this worktree reference,
+	// Note: OpenRepository will fail because the gitdir target path does not exist,
 	// but findGitRoot should successfully detect the .git file exists
 	// We're testing that findGitRoot can find .git regardless of whether it's a file or directory
 	_, err := git.OpenRepository(tmpDir)
@@ -248,4 +253,154 @@ func TestOpenRepository_FromSubdir_Integration(t *testing.T) {
 	}
 
 	t.Logf("Current branch (from subdir): %s", branch)
+}
+
+// TestOpenRepository_Worktree tests that OpenRepository works from a linked git worktree.
+func TestOpenRepository_Worktree(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git binary not found, skipping worktree test")
+	}
+
+	// Create main repository with go-git
+	mainDir := t.TempDir()
+	mainRepo, err := gogit.PlainInit(mainDir, false)
+	if err != nil {
+		t.Fatalf("Failed to init main repo: %v", err)
+	}
+
+	// Add remote origin
+	_, err = mainRepo.CreateRemote(&config.RemoteConfig{
+		Name: "origin",
+		URLs: []string{"https://github.com/test/test.git"},
+	})
+	if err != nil {
+		t.Fatalf("Failed to create remote: %v", err)
+	}
+
+	// Create initial commit on main
+	wt, err := mainRepo.Worktree()
+	if err != nil {
+		t.Fatalf("Failed to get worktree: %v", err)
+	}
+
+	readmePath := filepath.Join(mainDir, "README.md")
+	if err := os.WriteFile(readmePath, []byte("# Main\n"), 0644); err != nil {
+		t.Fatalf("Failed to write README: %v", err)
+	}
+	if _, err := wt.Add("README.md"); err != nil {
+		t.Fatalf("Failed to add README: %v", err)
+	}
+	_, err = wt.Commit("initial commit", &gogit.CommitOptions{
+		Author: &object.Signature{Name: "Test", Email: "test@test.com", When: time.Now()},
+	})
+	if err != nil {
+		t.Fatalf("Failed to create initial commit: %v", err)
+	}
+
+	// Create feature branch with a distinct commit using native git
+	cmd := exec.Command("git", "checkout", "-b", "feature-worktree")
+	cmd.Dir = mainDir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("Failed to create feature branch: %v\n%s", err, out)
+	}
+
+	featureFile := filepath.Join(mainDir, "feature.txt")
+	if err := os.WriteFile(featureFile, []byte("feature work\n"), 0644); err != nil {
+		t.Fatalf("Failed to write feature file: %v", err)
+	}
+
+	cmd = exec.Command("git", "add", "feature.txt")
+	cmd.Dir = mainDir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("Failed to add feature file: %v\n%s", err, out)
+	}
+
+	cmd = exec.Command("git", "commit", "-m", "feat: add feature work")
+	cmd.Dir = mainDir
+	cmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@test.com",
+		"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@test.com",
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("Failed to commit feature: %v\n%s", err, out)
+	}
+
+	// Switch back to main so we can create a worktree for the feature branch
+	cmd = exec.Command("git", "checkout", "main")
+	cmd.Dir = mainDir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		// Try "master" if "main" doesn't exist
+		cmd = exec.Command("git", "checkout", "master")
+		cmd.Dir = mainDir
+		if out2, err2 := cmd.CombinedOutput(); err2 != nil {
+			t.Fatalf("Failed to checkout main/master: %v\n%s\n%s", err, out, out2)
+		}
+	}
+
+	// Create linked worktree
+	worktreeDir := filepath.Join(t.TempDir(), "worktree-feature")
+	cmd = exec.Command("git", "worktree", "add", worktreeDir, "feature-worktree")
+	cmd.Dir = mainDir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("Failed to create worktree: %v\n%s", err, out)
+	}
+
+	// Verify .git is a file (worktree indicator)
+	gitPath := filepath.Join(worktreeDir, ".git")
+	info, err := os.Stat(gitPath)
+	if err != nil {
+		t.Fatalf("Failed to stat .git in worktree: %v", err)
+	}
+	if info.IsDir() {
+		t.Fatal("Expected .git to be a file in worktree, got directory")
+	}
+
+	// Open repository from worktree path
+	repo, err := git.OpenRepository(worktreeDir)
+	if err != nil {
+		t.Fatalf("Failed to open repository from worktree: %v", err)
+	}
+
+	// Assert: GetCurrentBranch returns the feature branch
+	branch, err := repo.GetCurrentBranch()
+	if err != nil {
+		t.Fatalf("Failed to get current branch from worktree: %v", err)
+	}
+	if branch != "feature-worktree" {
+		t.Errorf("Expected branch 'feature-worktree', got '%s'", branch)
+	}
+
+	// Assert: DetectPlatform works (reads shared remote config)
+	platform, err := repo.DetectPlatform()
+	if err != nil {
+		t.Fatalf("Failed to detect platform from worktree: %v", err)
+	}
+	if platform != "github" {
+		t.Errorf("Expected platform 'github', got '%s'", platform)
+	}
+
+	// Assert: GetLatestCommitMessage returns the worktree branch's commit
+	goGitRepo := repo.GoGitRepository()
+	head, err := goGitRepo.Head()
+	if err != nil {
+		t.Fatalf("Failed to get HEAD from worktree: %v", err)
+	}
+	commit, err := goGitRepo.CommitObject(head.Hash())
+	if err != nil {
+		t.Fatalf("Failed to get commit object: %v", err)
+	}
+	if strings.TrimSpace(commit.Message) != "feat: add feature work" {
+		t.Errorf("Expected commit message 'feat: add feature work', got '%s'", commit.Message)
+	}
+
+	// Also verify we can resolve the feature branch ref from worktree
+	ref, err := goGitRepo.Reference(plumbing.NewBranchReferenceName("feature-worktree"), true)
+	if err != nil {
+		t.Fatalf("Failed to resolve feature branch ref: %v", err)
+	}
+	if ref.Hash() != head.Hash() {
+		t.Error("Expected HEAD to match feature-worktree branch ref")
+	}
+
+	t.Logf("Worktree branch: %s, platform: %s, commit: %s", branch, platform, commit.Message)
 }
