@@ -1,6 +1,7 @@
 package fixtures
 
 import (
+	"fmt"
 	"time"
 
 	glpkg "github.com/sgaunet/auto-mr/pkg/gitlab"
@@ -192,7 +193,7 @@ func BasicMergeRequest(iid int64, sourceBranch, targetBranch string) *gitlab.Bas
 		SourceBranch: sourceBranch,
 		TargetBranch: targetBranch,
 		State:        "opened",
-		WebURL:       "https://gitlab.com/owner/project/-/merge_requests/" + string(rune(iid)),
+		WebURL:       fmt.Sprintf("https://gitlab.com/owner/project/-/merge_requests/%d", iid),
 	}
 }
 

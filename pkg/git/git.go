@@ -50,6 +50,9 @@ const (
 
 	// networkGitTimeout for network git operations (pull, fetch).
 	networkGitTimeout = 2 * time.Minute
+
+	// minSymrefFields is the minimum number of fields expected in "git ls-remote --symref" output.
+	minSymrefFields = 2
 )
 
 var (
@@ -319,39 +322,34 @@ func setupSSHAuth(logger *bullets.Logger) (*authMethod, error) {
 }
 
 // GetMainBranch determines the main branch name by checking the remote HEAD reference.
-// Falls back to checking for "main" and "master" branches if the remote HEAD is unavailable.
 //
-// Returns errMainBranchNotFound if neither method succeeds.
+// It first tries go-git's remote.List for authentication consistency with push operations.
+// If that fails (common with certain SSH configurations), it falls back to native
+// "git ls-remote --symref" which uses the system's SSH agent and config.
+// As a last resort, it checks for local "main" or "master" branches.
+//
+// Returns errMainBranchNotFound if no method succeeds.
 func (r *Repository) GetMainBranch() (string, error) {
 	r.log.Debug("Determining main branch")
-	remote, err := r.repo.Remote("origin")
-	if err != nil {
-		return "", fmt.Errorf("failed to get origin remote: %w", err)
-	}
 
-	refs, err := remote.List(&git.ListOptions{
-		Auth: r.auth,
-	})
-	if err != nil {
-		return "", fmt.Errorf("failed to list remote references: %w", err)
+	// Priority 1: Try go-git's remote.List
+	branch, err := r.getMainBranchViaGoGit()
+	if err == nil {
+		return branch, nil
 	}
+	r.log.Debug("go-git remote list failed, falling back to native git: " + err.Error())
 
-	for _, ref := range refs {
-		if ref.Name() == plumbing.HEAD {
-			// Extract branch name from symbolic reference
-			target := ref.Target()
-			if target.IsBranch() {
-				mainBranch := target.Short()
-				r.log.Debug("Main branch found: " + mainBranch)
-				return mainBranch, nil
-			}
-		}
+	// Priority 2: Fall back to native git (uses system SSH agent/config)
+	branch, err = r.getMainBranchViaNativeGit()
+	if err == nil {
+		return branch, nil
 	}
+	r.log.Debug("native git ls-remote failed: " + err.Error())
 
-	// Fallback to common default branches
+	// Priority 3: Check for common default branch names locally
 	for _, defaultBranch := range []string{"main", "master"} {
 		if r.branchExists(defaultBranch) {
-			r.log.Debug("Main branch found (fallback): " + defaultBranch)
+			r.log.Debug("Main branch found (local fallback): " + defaultBranch)
 			return defaultBranch, nil
 		}
 	}
@@ -423,13 +421,17 @@ func (r *Repository) DetectPlatform() (Platform, error) {
 	return "", errUnsupportedPlatform
 }
 
-// PushBranch pushes the specified branch to the origin remote using go-git.
+// PushBranch pushes the specified branch to the origin remote.
+// It first tries go-git for authentication consistency, then falls back to native
+// "git push" which uses the system's SSH agent and config.
 // If the branch is already up to date, no error is returned.
 //
 // Parameters:
 //   - branchName: the local branch name to push
 func (r *Repository) PushBranch(branchName string) error {
 	r.log.Debug("Pushing branch: " + branchName)
+
+	// Priority 1: Try go-git push
 	err := r.repo.Push(&git.PushOptions{
 		RemoteName: "origin",
 		RefSpecs: []config.RefSpec{
@@ -437,11 +439,14 @@ func (r *Repository) PushBranch(branchName string) error {
 		},
 		Auth: r.auth,
 	})
-	if err != nil && !errors.Is(err, git.NoErrAlreadyUpToDate) {
-		return fmt.Errorf("failed to push branch: %w", err)
+	if err == nil || errors.Is(err, git.NoErrAlreadyUpToDate) {
+		r.log.Debug("Branch pushed successfully (go-git): " + branchName)
+		return nil
 	}
-	r.log.Debug("Branch pushed successfully: " + branchName)
-	return nil
+
+	// Priority 2: Fall back to native git push (uses system SSH agent/config)
+	r.log.Debug("go-git push failed, falling back to native git: " + err.Error())
+	return r.pushBranchViaNativeGit(branchName)
 }
 
 // SwitchBranch switches to the specified branch using native "git switch".
@@ -462,6 +467,7 @@ func (r *Repository) SwitchBranch(ctx context.Context, branchName string) error 
 	ctx, cancel := context.WithTimeout(ctx, localGitTimeout)
 	defer cancel()
 
+	// #nosec G204 - branchName comes from git, not user input
 	cmd := exec.CommandContext(ctx, "git", "switch", branchName)
 	cmd.Dir = r.gitRoot // Set working directory to git root
 	output, err := cmd.CombinedOutput()
@@ -531,6 +537,7 @@ func (r *Repository) DeleteBranch(ctx context.Context, branchName string) error 
 	ctx, cancel := context.WithTimeout(ctx, localGitTimeout)
 	defer cancel()
 
+	// #nosec G204 - branchName comes from git, not user input
 	cmd := exec.CommandContext(ctx, "git", "branch", "-D", branchName)
 	cmd.Dir = r.gitRoot // Set working directory to git root
 	output, err := cmd.CombinedOutput()
@@ -665,6 +672,93 @@ func (r *Repository) GetRemoteURL(remoteName string) (string, error) {
 // This is used by the commits package to retrieve commit history.
 func (r *Repository) GoGitRepository() *git.Repository {
 	return r.repo
+}
+
+// getMainBranchViaGoGit attempts to determine the main branch using go-git's remote listing.
+func (r *Repository) getMainBranchViaGoGit() (string, error) {
+	remote, err := r.repo.Remote("origin")
+	if err != nil {
+		return "", fmt.Errorf("failed to get origin remote: %w", err)
+	}
+
+	refs, err := remote.List(&git.ListOptions{
+		Auth: r.auth,
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to list remote references: %w", err)
+	}
+
+	for _, ref := range refs {
+		if ref.Name() == plumbing.HEAD {
+			target := ref.Target()
+			if target.IsBranch() {
+				mainBranch := target.Short()
+				r.log.Debug("Main branch found (go-git): " + mainBranch)
+				return mainBranch, nil
+			}
+		}
+	}
+
+	return "", errMainBranchNotFound
+}
+
+// getMainBranchViaNativeGit determines the main branch using native git ls-remote.
+// This uses the system's SSH binary and agent, which handles more SSH configurations
+// than go-git's built-in SSH implementation.
+func (r *Repository) getMainBranchViaNativeGit() (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), networkGitTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "git", "ls-remote", "--symref", "origin", "HEAD")
+	cmd.Dir = r.gitRoot
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("git ls-remote failed: %w", err)
+	}
+
+	// Parse output like: "ref: refs/heads/main\tHEAD"
+	// strings.Fields splits into: ["ref:", "refs/heads/main", "HEAD"]
+	for line := range strings.SplitSeq(string(output), "\n") {
+		if strings.HasPrefix(line, "ref: refs/heads/") {
+			parts := strings.Fields(line)
+			if len(parts) >= minSymrefFields {
+				branch := strings.TrimPrefix(parts[1], "refs/heads/")
+				r.log.Debug("Main branch found (native git): " + branch)
+				return branch, nil
+			}
+		}
+	}
+
+	return "", errMainBranchNotFound
+}
+
+// pushBranchViaNativeGit pushes a branch using native git push.
+// This uses the system's SSH binary and agent, which handles more SSH configurations
+// than go-git's built-in SSH implementation.
+func (r *Repository) pushBranchViaNativeGit(branchName string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), networkGitTimeout)
+	defer cancel()
+
+	// #nosec G204 - branchName comes from git, not user input
+	cmd := exec.CommandContext(ctx, "git", "push", "-u", "origin", branchName)
+	cmd.Dir = r.gitRoot
+	output, err := cmd.CombinedOutput()
+
+	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return &GitTimeoutError{
+			Operation: "push",
+			Timeout:   networkGitTimeout,
+			Err:       err,
+		}
+	}
+
+	if err != nil {
+		//nolint:wrapcheck // Error is sanitized to prevent token leakage
+		return security.SanitizeError(fmt.Errorf("failed to push branch: %w\nOutput: %s", err, string(output)))
+	}
+
+	r.log.Debug("Branch pushed successfully (native git): " + branchName)
+	return nil
 }
 
 func (r *Repository) branchExists(branchName string) bool {
