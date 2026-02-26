@@ -90,7 +90,9 @@ func (c *Client) SetProjectFromURL(url string) error {
 func (c *Client) ListLabels() ([]*Label, error) {
 	c.log.Debug("Listing GitLab labels")
 
-	labels, _, err := c.client.Labels.ListLabels(c.projectID, nil)
+	labels, _, err := c.client.Labels.ListLabels(c.projectID, &gitlab.ListLabelsOptions{
+		IncludeAncestorGroups: gitlab.Ptr(true),
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list labels: %w", err)
 	}
