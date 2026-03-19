@@ -1,6 +1,7 @@
 package github
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -116,7 +117,7 @@ func (ct *checkTracker) handleNewCheck(newCheck *JobInfo, logger *bullets.Updata
 	statusText := formatJobStatus(newCheck)
 
 	if newCheck.Status == statusInProgress || newCheck.Status == statusQueued {
-		spinner := logger.SpinnerCircle(statusText)
+		spinner := logger.SpinnerCircle(context.Background(), statusText)
 		ct.setSpinner(newCheck.ID, spinner)
 		// Start time update loop for any check with spinner that has started timing
 		if newCheck.StartedAt != nil {
@@ -258,7 +259,7 @@ func (ct *checkTracker) transitionCheckToRunning(logger *bullets.UpdatableLogger
 	}
 
 	// Create new animated spinner (only if doesn't exist)
-	spinner := logger.SpinnerCircle(statusText)
+	spinner := logger.SpinnerCircle(context.Background(), statusText)
 	ct.setSpinner(checkID, spinner)
 
 	// Start time update loop for this spinner

@@ -1,6 +1,8 @@
 package github
 
 import (
+	"context"
+
 	"github.com/sgaunet/bullets"
 )
 
@@ -66,8 +68,8 @@ func (d *displayRenderer) InfoHandle(message string) *bullets.BulletHandle {
 
 // SpinnerCircle creates an animated spinner with the given message.
 // Returns a Spinner that can be stopped with Success(), Error(), or Replace().
-func (d *displayRenderer) SpinnerCircle(message string) *bullets.Spinner {
-	spinner := d.updatable.SpinnerCircle(message)
+func (d *displayRenderer) SpinnerCircle(ctx context.Context, message string) *bullets.Spinner {
+	spinner := d.updatable.SpinnerCircle(ctx, message)
 	return spinner
 }
 

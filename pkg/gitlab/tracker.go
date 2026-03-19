@@ -1,6 +1,7 @@
 package gitlab
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -115,7 +116,7 @@ func (jt *jobTracker) handleNewJob(newJob *Job, logger *bullets.UpdatableLogger)
 	statusText := formatJobStatus(newJob)
 
 	if newJob.Status == statusRunning || newJob.Status == statusPending {
-		spinner := logger.SpinnerCircle(statusText)
+		spinner := logger.SpinnerCircle(context.Background(), statusText)
 		jt.setSpinner(newJob.ID, spinner)
 		// Start time update loop for any job with spinner that has started timing
 		if newJob.StartedAt != nil {
@@ -246,7 +247,7 @@ func (jt *jobTracker) transitionJobToRunning(logger *bullets.UpdatableLogger, jo
 	}
 
 	// Create new animated spinner (only if doesn't exist)
-	spinner := logger.SpinnerCircle(statusText)
+	spinner := logger.SpinnerCircle(context.Background(), statusText)
 	jt.setSpinner(jobID, spinner)
 
 	// Start time update loop for this spinner

@@ -1,6 +1,7 @@
 package mocks
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
@@ -218,7 +219,7 @@ func (m *MockDisplayRenderer) InfoHandle(message string) *bullets.BulletHandle {
 }
 
 // SpinnerCircle implements DisplayRenderer.
-func (m *MockDisplayRenderer) SpinnerCircle(message string) *bullets.Spinner {
+func (m *MockDisplayRenderer) SpinnerCircle(_ context.Context, message string) *bullets.Spinner {
 	m.trackMessage("spinner", message)
 	// Return a mock spinner - in real tests you might want to track spinner operations too
 	return &bullets.Spinner{}

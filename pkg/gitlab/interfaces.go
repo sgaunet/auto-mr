@@ -1,6 +1,7 @@
 package gitlab
 
 import (
+	"context"
 	"time"
 
 	"github.com/sgaunet/bullets"
@@ -101,7 +102,7 @@ type DisplayRenderer interface {
 
 	// SpinnerCircle creates an animated spinner with the given message.
 	// Returns a Spinner that can be stopped with Success(), Error(), or Replace().
-	SpinnerCircle(message string) *bullets.Spinner
+	SpinnerCircle(ctx context.Context, message string) *bullets.Spinner
 
 	// IncreasePadding increases the indentation level for nested output.
 	IncreasePadding()
