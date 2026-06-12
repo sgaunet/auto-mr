@@ -20,7 +20,7 @@ import (
 // Returns [ErrTokenRequired] if GITLAB_TOKEN is not set.
 // Returns a wrapped error if the underlying GitLab client creation fails.
 func NewClient() (*Client, error) {
-	token := os.Getenv("GITLAB_TOKEN")
+	token := strings.TrimSpace(os.Getenv("GITLAB_TOKEN"))
 	if token == "" {
 		return nil, errTokenRequired
 	}

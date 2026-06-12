@@ -25,6 +25,7 @@ package forgejo
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"code.gitea.io/sdk/gitea"
@@ -40,7 +41,7 @@ import (
 //
 // Returns [ErrTokenRequired] if FORGEJO_TOKEN is not set.
 func NewClient(baseURL string) (*Client, error) {
-	token := os.Getenv("FORGEJO_TOKEN")
+	token := strings.TrimSpace(os.Getenv("FORGEJO_TOKEN"))
 	if token == "" {
 		return nil, errTokenRequired
 	}
