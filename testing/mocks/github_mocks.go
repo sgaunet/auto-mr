@@ -3,6 +3,7 @@ package mocks
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -39,6 +40,18 @@ type MethodCall struct {
 	Args   map[string]any
 }
 
+// Argument keys used in tracked MethodCall.Args maps, shared across mock clients.
+const (
+	argHead         = "head"
+	argTitle        = "title"
+	argLabels       = "labels"
+	argTimeout      = "timeout"
+	argCommitTitle  = "commitTitle"
+	argSourceBranch = "sourceBranch"
+	argTargetBranch = "targetBranch"
+	argSquash       = "squash"
+)
+
 // NewGitHubAPIClient creates a new mock GitHub API client.
 func NewGitHubAPIClient() *GitHubAPIClient {
 	return &GitHubAPIClient{
@@ -66,13 +79,13 @@ func (m *GitHubAPIClient) CreatePullRequest(
 	assignees, reviewers, labels []string,
 ) (*github.PullRequest, error) {
 	m.trackCall("CreatePullRequest", map[string]any{
-		"head":      head,
+		argHead:     head,
 		"base":      base,
-		"title":     title,
+		argTitle:    title,
 		"body":      body,
 		"assignees": assignees,
 		"reviewers": reviewers,
-		"labels":    labels,
+		argLabels:   labels,
 	})
 	return m.CreatePullRequestResponse, m.CreatePullRequestError
 }
@@ -80,8 +93,8 @@ func (m *GitHubAPIClient) CreatePullRequest(
 // GetPullRequestByBranch implements github.APIClient.
 func (m *GitHubAPIClient) GetPullRequestByBranch(head, base string) (*github.PullRequest, error) {
 	m.trackCall("GetPullRequestByBranch", map[string]any{
-		"head": head,
-		"base": base,
+		argHead: head,
+		"base":  base,
 	})
 	return m.GetPullRequestByBranchResponse, m.GetPullRequestByBranchError
 }
@@ -89,7 +102,7 @@ func (m *GitHubAPIClient) GetPullRequestByBranch(head, base string) (*github.Pul
 // WaitForWorkflows implements github.APIClient.
 func (m *GitHubAPIClient) WaitForWorkflows(timeout time.Duration) (string, error) {
 	m.trackCall("WaitForWorkflows", map[string]any{
-		"timeout": timeout,
+		argTimeout: timeout,
 	})
 	return m.WaitForWorkflowsConclusion, m.WaitForWorkflowsError
 }
@@ -97,9 +110,9 @@ func (m *GitHubAPIClient) WaitForWorkflows(timeout time.Duration) (string, error
 // MergePullRequest implements github.APIClient.
 func (m *GitHubAPIClient) MergePullRequest(prNumber int, mergeMethod, commitTitle string) error {
 	m.trackCall("MergePullRequest", map[string]any{
-		"prNumber":    prNumber,
-		"mergeMethod": mergeMethod,
-		"commitTitle": commitTitle,
+		"prNumber":     prNumber,
+		"mergeMethod":  mergeMethod,
+		argCommitTitle: commitTitle,
 	})
 	return m.MergePullRequestError
 }
@@ -107,7 +120,7 @@ func (m *GitHubAPIClient) MergePullRequest(prNumber int, mergeMethod, commitTitl
 // GetPullRequestsByHead implements github.APIClient.
 func (m *GitHubAPIClient) GetPullRequestsByHead(head string) ([]*github.PullRequest, error) {
 	m.trackCall("GetPullRequestsByHead", map[string]any{
-		"head": head,
+		argHead: head,
 	})
 	return m.GetPullRequestsByHeadResponse, m.GetPullRequestsByHeadError
 }
@@ -144,9 +157,9 @@ func (m *GitHubAPIClient) GetCallCount(method string) int {
 func (m *GitHubAPIClient) GetLastCall(method string) *MethodCall {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for i := len(m.calls) - 1; i >= 0; i-- {
-		if m.calls[i].Method == method {
-			return &m.calls[i]
+	for _, v := range slices.Backward(m.calls) {
+		if v.Method == method {
+			return &v
 		}
 	}
 	return nil

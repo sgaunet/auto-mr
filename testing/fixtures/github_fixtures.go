@@ -25,7 +25,7 @@ func ValidPullRequest() *github.PullRequest {
 		Title:  new("Test Pull Request"),
 		State:  new("open"),
 		Head: &github.PullRequestBranch{
-			Ref: new("feature-branch"),
+			Ref: new(defaultSourceBr),
 			SHA: new("abc123def456"),
 		},
 		Base: &github.PullRequestBranch{
@@ -128,10 +128,10 @@ func JobInfoFromCheckRun(check *github.CheckRun) *ghpkg.JobInfo {
 // ValidLabels returns a list of valid GitHub labels for testing.
 func ValidLabels() []*ghpkg.Label {
 	return []*ghpkg.Label{
-		{Name: "bug"},
-		{Name: "enhancement"},
-		{Name: "documentation"},
-		{Name: "help wanted"},
+		{Name: labelBug},
+		{Name: labelEnhancement},
+		{Name: labelDocumentation},
+		{Name: labelHelpWanted},
 	}
 }
 

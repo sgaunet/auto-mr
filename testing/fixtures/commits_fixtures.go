@@ -13,6 +13,10 @@ const (
 	TestCommitHashShort = "abc123d"
 	// TestAuthor is a test commit author.
 	TestAuthor = "Test Developer <test@example.com>"
+	// msgFeatUserAuth is a sample conventional-commit message reused across fixtures.
+	msgFeatUserAuth = "feat: add user authentication"
+	// parentHash1 is a sample parent commit hash reused across fixtures.
+	parentHash1 = "parent1"
 )
 
 // SingleCommit returns a single valid commit for testing auto-selection scenarios.
@@ -21,8 +25,8 @@ func SingleCommit() []commits.Commit {
 		{
 			Hash:         TestCommitHashFull,
 			ShortHash:    TestCommitHashShort,
-			Message:      "feat: add user authentication",
-			Title:        "feat: add user authentication",
+			Message:      msgFeatUserAuth,
+			Title:        msgFeatUserAuth,
 			Body:         "",
 			Author:       TestAuthor,
 			Timestamp:    time.Date(2025, 1, 11, 10, 30, 0, 0, time.UTC),
@@ -102,7 +106,7 @@ func CommitsWithMerges() []commits.Commit {
 			Body:         "",
 			Author:       TestAuthor,
 			Timestamp:    time.Date(2025, 1, 11, 10, 30, 0, 0, time.UTC),
-			ParentHashes: []string{"parent1"},
+			ParentHashes: []string{parentHash1},
 		},
 		{
 			Hash:         "merge123456789012345678901234567890abcd",
@@ -112,7 +116,7 @@ func CommitsWithMerges() []commits.Commit {
 			Body:         "",
 			Author:       TestAuthor,
 			Timestamp:    time.Date(2025, 1, 11, 11, 0, 0, 0, time.UTC),
-			ParentHashes: []string{"parent1", "parent2"}, // Merge commit has 2 parents
+			ParentHashes: []string{parentHash1, "parent2"}, // Merge commit has 2 parents
 		},
 		{
 			Hash:         "ghi789012345678901234567890123456789abcd",
@@ -138,7 +142,7 @@ func CommitsWithEmptyMessages() []commits.Commit {
 			Body:         "",
 			Author:       TestAuthor,
 			Timestamp:    time.Date(2025, 1, 11, 10, 30, 0, 0, time.UTC),
-			ParentHashes: []string{"parent1"},
+			ParentHashes: []string{parentHash1},
 		},
 		{
 			Hash:         "def456789012345678901234567890123456abcd",
@@ -156,7 +160,7 @@ func CommitsWithEmptyMessages() []commits.Commit {
 // ValidMessageSelection returns a valid message selection for testing.
 func ValidMessageSelection() commits.MessageSelection {
 	return commits.MessageSelection{
-		Title:            "feat: add user authentication",
+		Title:            msgFeatUserAuth,
 		Body:             "",
 		SourceCommitHash: TestCommitHashFull,
 		SelectionMethod:  commits.SelectionAuto,

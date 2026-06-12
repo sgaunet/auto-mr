@@ -31,7 +31,7 @@ func ValidMergeRequest() *gitlab.MergeRequest {
 			IID:          defaultMRIID,
 			Title:        "Test Merge Request",
 			State:        "opened",
-			SourceBranch: "feature-branch",
+			SourceBranch: defaultSourceBr,
 			TargetBranch: "main",
 			SHA:          "abc123def456",
 			Author: &gitlab.BasicUser{
@@ -50,7 +50,7 @@ func SuccessfulPipeline(id int64, sha string) *gitlab.PipelineInfo {
 		ID:        id,
 		SHA:       sha,
 		Status:    "success",
-		Ref:       "feature-branch",
+		Ref:       defaultSourceBr,
 		CreatedAt: &now,
 		UpdatedAt: &updated,
 		WebURL:    "https://gitlab.com/owner/project/-/pipelines/456",
@@ -65,7 +65,7 @@ func FailedPipeline(id int64, sha string) *gitlab.PipelineInfo {
 		ID:        id,
 		SHA:       sha,
 		Status:    "failed",
-		Ref:       "feature-branch",
+		Ref:       defaultSourceBr,
 		CreatedAt: &now,
 		UpdatedAt: &updated,
 		WebURL:    "https://gitlab.com/owner/project/-/pipelines/789",
@@ -79,7 +79,7 @@ func RunningPipeline(id int64, sha string) *gitlab.PipelineInfo {
 		ID:        id,
 		SHA:       sha,
 		Status:    "running",
-		Ref:       "feature-branch",
+		Ref:       defaultSourceBr,
 		CreatedAt: &now,
 		WebURL:    "https://gitlab.com/owner/project/-/pipelines/101",
 	}
@@ -92,7 +92,7 @@ func PendingPipeline(id int64, sha string) *gitlab.PipelineInfo {
 		ID:        id,
 		SHA:       sha,
 		Status:    "pending",
-		Ref:       "feature-branch",
+		Ref:       defaultSourceBr,
 		CreatedAt: &now,
 		WebURL:    "https://gitlab.com/owner/project/-/pipelines/202",
 	}
@@ -178,10 +178,10 @@ func SkippedJob(id int64, name, stage string) *glpkg.Job {
 // ValidGitLabLabels returns a list of valid GitLab labels for testing.
 func ValidGitLabLabels() []*glpkg.Label {
 	return []*glpkg.Label{
-		{Name: "bug"},
-		{Name: "enhancement"},
-		{Name: "documentation"},
-		{Name: "help wanted"},
+		{Name: labelBug},
+		{Name: labelEnhancement},
+		{Name: labelDocumentation},
+		{Name: labelHelpWanted},
 	}
 }
 
