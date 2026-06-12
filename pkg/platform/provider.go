@@ -2,8 +2,8 @@ package platform
 
 import "time"
 
-// Provider defines the unified interface for GitLab and GitHub operations.
-// Implementations are [GitLabAdapter] and [GitHubAdapter], created via [NewProvider].
+// Provider defines the unified interface for GitLab, GitHub, and Forgejo operations.
+// Implementations are [GitLabAdapter], [GitHubAdapter], and [ForgejoAdapter], created via [NewProvider].
 type Provider interface {
 	// Initialize sets up the client from a git remote URL.
 	Initialize(remoteURL string) error
@@ -29,7 +29,7 @@ type Provider interface {
 	// GitHub: also deletes the remote branch internally.
 	Merge(params MergeParams) error
 
-	// PlatformName returns "GitLab" or "GitHub".
+	// PlatformName returns "GitLab", "GitHub", or "Forgejo".
 	PlatformName() string
 
 	// PipelineTimeout returns the config value for timeout resolution.

@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/sgaunet/auto-mr/pkg/config"
+	"github.com/sgaunet/auto-mr/pkg/forgejo"
 	"github.com/sgaunet/auto-mr/pkg/git"
 	ghclient "github.com/sgaunet/auto-mr/pkg/github"
 	"github.com/sgaunet/auto-mr/pkg/gitlab"
@@ -18,11 +19,11 @@ var errUnsupportedPlatform = errors.New("unsupported platform")
 // It creates the underlying API client, configures logging, and wraps it in the appropriate adapter.
 //
 // Parameters:
-//   - p: the detected platform ([git.PlatformGitLab] or [git.PlatformGitHub])
+//   - p: the detected platform ([git.PlatformGitLab], [git.PlatformGitHub], or [git.PlatformForgejo])
 //   - cfg: the loaded configuration (must not be nil)
 //   - logger: the logger instance for debug output
 //
-// Returns errUnsupportedPlatform if the platform is not GitLab or GitHub.
+// Returns errUnsupportedPlatform if the platform is not GitLab, GitHub, or Forgejo.
 //
 //nolint:ireturn // Factory function must return interface to enable platform abstraction.
 func NewProvider(p git.Platform, cfg *config.Config, logger *bullets.Logger) (Provider, error) {
@@ -42,6 +43,14 @@ func NewProvider(p git.Platform, cfg *config.Config, logger *bullets.Logger) (Pr
 		}
 		client.SetLogger(logger)
 		return NewGitHubAdapter(client, cfg.GitHub, logger), nil
+
+	case git.PlatformForgejo:
+		client, err := forgejo.NewClient(cfg.Forgejo.URL)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create Forgejo client: %w", err)
+		}
+		client.SetLogger(logger)
+		return NewForgejoAdapter(client, cfg.Forgejo, logger), nil
 
 	default:
 		return nil, fmt.Errorf("%w: %s", errUnsupportedPlatform, p)

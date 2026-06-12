@@ -10,6 +10,168 @@ import (
 	"github.com/sgaunet/auto-mr/pkg/config"
 )
 
+// ========== Forgejo YAML fixtures ==========
+
+const (
+	validConfigWithForgejo = `
+gitlab:
+  assignee: john-doe
+  reviewer: jane-smith
+github:
+  assignee: bob-jones
+  reviewer: alice-wilson
+forgejo:
+  url: https://codeberg.org
+  assignee: carol-dev
+  reviewer: dave-review
+`
+
+	validConfigWithForgejoTimeout = `
+gitlab:
+  assignee: john-doe
+  reviewer: jane-smith
+github:
+  assignee: bob-jones
+  reviewer: alice-wilson
+forgejo:
+  url: https://codeberg.org
+  assignee: carol-dev
+  reviewer: dave-review
+  pipeline_timeout: 30m
+`
+
+	// Backward-compat: no forgejo section at all — must still pass.
+	validConfigNoForgejo = `
+gitlab:
+  assignee: john-doe
+  reviewer: jane-smith
+github:
+  assignee: bob-jones
+  reviewer: alice-wilson
+`
+
+	configForgejoMissingAssignee = `
+gitlab:
+  assignee: john-doe
+  reviewer: jane-smith
+github:
+  assignee: bob-jones
+  reviewer: alice-wilson
+forgejo:
+  url: https://codeberg.org
+  assignee: ""
+  reviewer: dave-review
+`
+
+	configForgejoMissingReviewer = `
+gitlab:
+  assignee: john-doe
+  reviewer: jane-smith
+github:
+  assignee: bob-jones
+  reviewer: alice-wilson
+forgejo:
+  url: https://codeberg.org
+  assignee: carol-dev
+  reviewer: ""
+`
+
+	configForgejoInvalidAssignee = `
+gitlab:
+  assignee: john-doe
+  reviewer: jane-smith
+github:
+  assignee: bob-jones
+  reviewer: alice-wilson
+forgejo:
+  url: https://codeberg.org
+  assignee: -bad-start
+  reviewer: dave-review
+`
+
+	configForgejoInvalidReviewer = `
+gitlab:
+  assignee: john-doe
+  reviewer: jane-smith
+github:
+  assignee: bob-jones
+  reviewer: alice-wilson
+forgejo:
+  url: https://codeberg.org
+  assignee: carol-dev
+  reviewer: bad.period
+`
+
+	configForgejoInvalidURL = `
+gitlab:
+  assignee: john-doe
+  reviewer: jane-smith
+github:
+  assignee: bob-jones
+  reviewer: alice-wilson
+forgejo:
+  url: not-a-url
+  assignee: carol-dev
+  reviewer: dave-review
+`
+
+	configForgejoFTPURL = `
+gitlab:
+  assignee: john-doe
+  reviewer: jane-smith
+github:
+  assignee: bob-jones
+  reviewer: alice-wilson
+forgejo:
+  url: ftp://codeberg.org
+  assignee: carol-dev
+  reviewer: dave-review
+`
+
+	configForgejoURLNoHost = `
+gitlab:
+  assignee: john-doe
+  reviewer: jane-smith
+github:
+  assignee: bob-jones
+  reviewer: alice-wilson
+forgejo:
+  url: https://
+  assignee: carol-dev
+  reviewer: dave-review
+`
+
+	configForgejoInvalidTimeout = `
+gitlab:
+  assignee: john-doe
+  reviewer: jane-smith
+github:
+  assignee: bob-jones
+  reviewer: alice-wilson
+forgejo:
+  url: https://codeberg.org
+  assignee: carol-dev
+  reviewer: dave-review
+  pipeline_timeout: bad
+`
+
+	configForgejoTimeoutTooSmall = `
+gitlab:
+  assignee: john-doe
+  reviewer: jane-smith
+github:
+  assignee: bob-jones
+  reviewer: alice-wilson
+forgejo:
+  url: https://codeberg.org
+  assignee: carol-dev
+  reviewer: dave-review
+  pipeline_timeout: 30s
+`
+)
+
+// ========== Forgejo YAML fixtures ==========
+
 // YAML fixtures for Load() tests.
 const (
 	validConfigYAML = `
@@ -1349,5 +1511,409 @@ func TestTimeoutBoundaryValues(t *testing.T) {
 				t.Errorf("Unexpected error: %v", err)
 			}
 		})
+	}
+}
+
+// ========== Forgejo Validation Tests ==========
+
+// validBaseConfig returns a minimal valid GitLab+GitHub config for use
+// in Forgejo-focused test cases.
+func validBaseConfig() config.Config {
+	return config.Config{
+		GitLab: config.GitLabConfig{Assignee: "valid", Reviewer: "valid"},
+		GitHub: config.GitHubConfig{Assignee: "valid", Reviewer: "valid"},
+	}
+}
+
+// TestForgejoBackwardCompatibility confirms that configs with no forgejo
+// section still pass validation unchanged.
+func TestForgejoBackwardCompatibility(t *testing.T) {
+	t.Run("no forgejo section in struct", func(t *testing.T) {
+		cfg := validBaseConfig()
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("Expected no error for config without forgejo, got: %v", err)
+		}
+	})
+
+	t.Run("no forgejo section in YAML file", func(t *testing.T) {
+		setupTestConfig(t, validConfigNoForgejo)
+
+		cfg, err := config.Load()
+		if err != nil {
+			t.Fatalf("Expected Load() to succeed without forgejo section, got: %v", err)
+		}
+		if cfg == nil {
+			t.Fatal("Expected non-nil config")
+		}
+		// Forgejo fields must be zero-valued
+		if cfg.Forgejo.URL != "" {
+			t.Errorf("Expected empty Forgejo.URL, got '%s'", cfg.Forgejo.URL)
+		}
+	})
+
+	t.Run("forgejo url whitespace-only is treated as empty (skips validation)", func(t *testing.T) {
+		cfg := validBaseConfig()
+		cfg.Forgejo.URL = "   " // Trimmed to "" by Validate()
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("Expected no error when forgejo URL is whitespace-only, got: %v", err)
+		}
+	})
+}
+
+// TestValidateForgejoURL tests URL validation in the forgejo section.
+func TestValidateForgejoURL(t *testing.T) {
+	tests := []struct {
+		name      string
+		url       string
+		wantError error
+	}{
+		// Valid URLs
+		{"https scheme", "https://codeberg.org", nil},
+		{"http scheme", "http://my-forgejo.example.com", nil},
+		{"https with path", "https://forgejo.example.org/api", nil},
+		{"https with port", "https://forgejo.example.org:3000", nil},
+
+		// Invalid URLs
+		{"ftp scheme", "ftp://codeberg.org", config.ErrForgejoURLInvalid},
+		{"no scheme", "codeberg.org", config.ErrForgejoURLInvalid},
+		{"empty host", "https://", config.ErrForgejoURLInvalid},
+		{"plain text", "not-a-url", config.ErrForgejoURLInvalid},
+		{"scheme only", "https:", config.ErrForgejoURLInvalid},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := validBaseConfig()
+			cfg.Forgejo = config.ForgejoConfig{
+				URL:      tt.url,
+				Assignee: "valid",
+				Reviewer: "valid",
+			}
+			err := cfg.Validate()
+
+			if tt.wantError != nil {
+				if err == nil {
+					t.Errorf("Expected error %v, got nil", tt.wantError)
+				} else if !errors.Is(err, tt.wantError) {
+					t.Errorf("Expected error %v, got %v", tt.wantError, err)
+				}
+			} else if err != nil {
+				t.Errorf("Unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+// TestValidateForgejoAssignee tests forgejo assignee validation.
+func TestValidateForgejoAssignee(t *testing.T) {
+	tests := []struct {
+		name      string
+		assignee  string
+		wantError error
+	}{
+		// Valid
+		{"valid assignee", "carol-dev", nil},
+		{"valid with underscore", "carol_dev", nil},
+		{"valid with numbers", "carol123", nil},
+		{"valid single char", "c", nil},
+
+		// Empty
+		{"empty assignee", "", config.ErrForgejoAssigneeEmpty},
+		{"whitespace-only assignee", "   ", config.ErrForgejoAssigneeEmpty},
+
+		// Invalid format
+		{"starts with hyphen", "-carol", config.ErrForgejoAssigneeInvalid},
+		{"ends with hyphen", "carol-", config.ErrForgejoAssigneeInvalid},
+		{"starts with underscore", "_carol", config.ErrForgejoAssigneeInvalid},
+		{"ends with underscore", "carol_", config.ErrForgejoAssigneeInvalid},
+		{"contains @", "carol@dev", config.ErrForgejoAssigneeInvalid},
+		{"contains period", "carol.dev", config.ErrForgejoAssigneeInvalid},
+		{"contains space", "carol dev", config.ErrForgejoAssigneeInvalid},
+		{"too long 40 chars", "abcdefghijklmnopqrstuvwxyz12345678901234", config.ErrForgejoAssigneeInvalid},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := validBaseConfig()
+			cfg.Forgejo = config.ForgejoConfig{
+				URL:      "https://codeberg.org",
+				Assignee: tt.assignee,
+				Reviewer: "valid",
+			}
+			err := cfg.Validate()
+
+			if tt.wantError != nil {
+				if err == nil {
+					t.Errorf("Expected error %v, got nil", tt.wantError)
+				} else if !errors.Is(err, tt.wantError) {
+					t.Errorf("Expected error %v, got %v", tt.wantError, err)
+				}
+			} else if err != nil {
+				t.Errorf("Unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+// TestValidateForgejoReviewer tests forgejo reviewer validation.
+func TestValidateForgejoReviewer(t *testing.T) {
+	tests := []struct {
+		name      string
+		reviewer  string
+		wantError error
+	}{
+		// Valid
+		{"valid reviewer", "dave-review", nil},
+		{"valid with underscore", "dave_review", nil},
+		{"valid with numbers", "dave123", nil},
+		{"valid single char", "d", nil},
+
+		// Empty
+		{"empty reviewer", "", config.ErrForgejoReviewerEmpty},
+		{"whitespace-only reviewer", "   ", config.ErrForgejoReviewerEmpty},
+
+		// Invalid format
+		{"starts with hyphen", "-dave", config.ErrForgejoReviewerInvalid},
+		{"ends with hyphen", "dave-", config.ErrForgejoReviewerInvalid},
+		{"contains @", "dave@review", config.ErrForgejoReviewerInvalid},
+		{"contains period", "dave.review", config.ErrForgejoReviewerInvalid},
+		{"contains space", "dave review", config.ErrForgejoReviewerInvalid},
+		{"too long 40 chars", "abcdefghijklmnopqrstuvwxyz12345678901234", config.ErrForgejoReviewerInvalid},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := validBaseConfig()
+			cfg.Forgejo = config.ForgejoConfig{
+				URL:      "https://codeberg.org",
+				Assignee: "valid",
+				Reviewer: tt.reviewer,
+			}
+			err := cfg.Validate()
+
+			if tt.wantError != nil {
+				if err == nil {
+					t.Errorf("Expected error %v, got nil", tt.wantError)
+				} else if !errors.Is(err, tt.wantError) {
+					t.Errorf("Expected error %v, got %v", tt.wantError, err)
+				}
+			} else if err != nil {
+				t.Errorf("Unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+// TestValidateForgejoTimeout tests forgejo pipeline_timeout validation.
+func TestValidateForgejoTimeout(t *testing.T) {
+	tests := []struct {
+		name      string
+		timeout   string
+		wantError error
+	}{
+		{"empty (uses default)", "", nil},
+		{"valid 30 minutes", "30m", nil},
+		{"valid 1 hour", "1h", nil},
+		{"valid minimum 1m", "1m", nil},
+		{"valid maximum 8h", "8h", nil},
+		{"invalid no unit", "30", config.ErrInvalidTimeout},
+		{"invalid text", "bad", config.ErrInvalidTimeout},
+		{"timeout too small 30s", "30s", config.ErrTimeoutTooSmall},
+		{"timeout too large 9h", "9h", config.ErrTimeoutTooLarge},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := validBaseConfig()
+			cfg.Forgejo = config.ForgejoConfig{
+				URL:             "https://codeberg.org",
+				Assignee:        "valid",
+				Reviewer:        "valid",
+				PipelineTimeout: tt.timeout,
+			}
+			err := cfg.Validate()
+
+			if tt.wantError != nil {
+				if err == nil {
+					t.Errorf("Expected error %v, got nil", tt.wantError)
+				} else if !errors.Is(err, tt.wantError) {
+					t.Errorf("Expected error %v, got %v", tt.wantError, err)
+				}
+			} else if err != nil {
+				t.Errorf("Unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+// TestLoadWithForgejo tests Load() integration for forgejo configurations.
+func TestLoadWithForgejo(t *testing.T) {
+	tests := []struct {
+		name          string
+		configYAML    string
+		expectError   bool
+		expectedError error
+		checkForgejo  func(*testing.T, *config.Config)
+	}{
+		{
+			name:        "valid forgejo section passes",
+			configYAML:  validConfigWithForgejo,
+			expectError: false,
+			checkForgejo: func(t *testing.T, cfg *config.Config) {
+				t.Helper()
+				if cfg.Forgejo.URL != "https://codeberg.org" {
+					t.Errorf("Forgejo.URL: expected 'https://codeberg.org', got '%s'", cfg.Forgejo.URL)
+				}
+				if cfg.Forgejo.Assignee != "carol-dev" {
+					t.Errorf("Forgejo.Assignee: expected 'carol-dev', got '%s'", cfg.Forgejo.Assignee)
+				}
+				if cfg.Forgejo.Reviewer != "dave-review" {
+					t.Errorf("Forgejo.Reviewer: expected 'dave-review', got '%s'", cfg.Forgejo.Reviewer)
+				}
+			},
+		},
+		{
+			name:        "valid forgejo section with timeout passes",
+			configYAML:  validConfigWithForgejoTimeout,
+			expectError: false,
+			checkForgejo: func(t *testing.T, cfg *config.Config) {
+				t.Helper()
+				if cfg.Forgejo.PipelineTimeout != "30m" {
+					t.Errorf("Forgejo.PipelineTimeout: expected '30m', got '%s'", cfg.Forgejo.PipelineTimeout)
+				}
+			},
+		},
+		{
+			name:        "no forgejo section (backward compat)",
+			configYAML:  validConfigNoForgejo,
+			expectError: false,
+			checkForgejo: func(t *testing.T, cfg *config.Config) {
+				t.Helper()
+				if cfg.Forgejo.URL != "" {
+					t.Errorf("Expected empty Forgejo.URL, got '%s'", cfg.Forgejo.URL)
+				}
+			},
+		},
+		{
+			name:          "missing forgejo assignee",
+			configYAML:    configForgejoMissingAssignee,
+			expectError:   true,
+			expectedError: config.ErrForgejoAssigneeEmpty,
+		},
+		{
+			name:          "missing forgejo reviewer",
+			configYAML:    configForgejoMissingReviewer,
+			expectError:   true,
+			expectedError: config.ErrForgejoReviewerEmpty,
+		},
+		{
+			name:          "invalid forgejo assignee format",
+			configYAML:    configForgejoInvalidAssignee,
+			expectError:   true,
+			expectedError: config.ErrForgejoAssigneeInvalid,
+		},
+		{
+			name:          "invalid forgejo reviewer format",
+			configYAML:    configForgejoInvalidReviewer,
+			expectError:   true,
+			expectedError: config.ErrForgejoReviewerInvalid,
+		},
+		{
+			name:          "invalid forgejo URL (plain text)",
+			configYAML:    configForgejoInvalidURL,
+			expectError:   true,
+			expectedError: config.ErrForgejoURLInvalid,
+		},
+		{
+			name:          "invalid forgejo URL (ftp scheme)",
+			configYAML:    configForgejoFTPURL,
+			expectError:   true,
+			expectedError: config.ErrForgejoURLInvalid,
+		},
+		{
+			name:          "invalid forgejo URL (no host)",
+			configYAML:    configForgejoURLNoHost,
+			expectError:   true,
+			expectedError: config.ErrForgejoURLInvalid,
+		},
+		{
+			name:          "invalid forgejo timeout format",
+			configYAML:    configForgejoInvalidTimeout,
+			expectError:   true,
+			expectedError: config.ErrInvalidTimeout,
+		},
+		{
+			name:          "forgejo timeout too small",
+			configYAML:    configForgejoTimeoutTooSmall,
+			expectError:   true,
+			expectedError: config.ErrTimeoutTooSmall,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setupTestConfig(t, tt.configYAML)
+
+			cfg, err := config.Load()
+
+			if tt.expectError {
+				if err == nil {
+					t.Fatal("Expected error, got nil")
+				}
+				if tt.expectedError != nil && !errors.Is(err, tt.expectedError) {
+					t.Errorf("Expected error %v, got: %v", tt.expectedError, err)
+				}
+				if cfg != nil {
+					t.Error("Expected nil config on error")
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("Expected success, got error: %v", err)
+				}
+				if cfg == nil {
+					t.Fatal("Expected non-nil config")
+				}
+				if tt.checkForgejo != nil {
+					tt.checkForgejo(t, cfg)
+				}
+			}
+		})
+	}
+}
+
+// TestForgejoValidationOrder confirms that forgejo errors surface after
+// gitlab and github validation succeeds.
+func TestForgejoValidationOrder(t *testing.T) {
+	// GitLab errors come before Forgejo errors
+	cfg := &config.Config{
+		GitLab:  config.GitLabConfig{Assignee: "", Reviewer: "valid"},
+		GitHub:  config.GitHubConfig{Assignee: "valid", Reviewer: "valid"},
+		Forgejo: config.ForgejoConfig{URL: "bad-url", Assignee: "valid", Reviewer: "valid"},
+	}
+	err := cfg.Validate()
+	if !errors.Is(err, config.ErrGitLabAssigneeEmpty) {
+		t.Errorf("Expected ErrGitLabAssigneeEmpty before ErrForgejoURLInvalid, got: %v", err)
+	}
+
+	// GitHub errors come before Forgejo errors
+	cfg = &config.Config{
+		GitLab:  config.GitLabConfig{Assignee: "valid", Reviewer: "valid"},
+		GitHub:  config.GitHubConfig{Assignee: "", Reviewer: "valid"},
+		Forgejo: config.ForgejoConfig{URL: "bad-url", Assignee: "valid", Reviewer: "valid"},
+	}
+	err = cfg.Validate()
+	if !errors.Is(err, config.ErrGitHubAssigneeEmpty) {
+		t.Errorf("Expected ErrGitHubAssigneeEmpty before ErrForgejoURLInvalid, got: %v", err)
+	}
+
+	// Forgejo URL error comes before assignee error
+	cfg = &config.Config{
+		GitLab:  config.GitLabConfig{Assignee: "valid", Reviewer: "valid"},
+		GitHub:  config.GitHubConfig{Assignee: "valid", Reviewer: "valid"},
+		Forgejo: config.ForgejoConfig{URL: "bad-url", Assignee: "", Reviewer: "valid"},
+	}
+	err = cfg.Validate()
+	if !errors.Is(err, config.ErrForgejoURLInvalid) {
+		t.Errorf("Expected ErrForgejoURLInvalid before ErrForgejoAssigneeEmpty, got: %v", err)
 	}
 }

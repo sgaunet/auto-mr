@@ -2,20 +2,24 @@
 // ~/.config/auto-mr/config.yml.
 //
 // The configuration file uses YAML format with required fields for both
-// GitLab and GitHub platforms (assignee and reviewer usernames). Optional
-// pipeline_timeout fields accept Go duration strings (e.g., "45m", "1h30m")
-// with bounds of 1 minute to 8 hours.
+// GitLab and GitHub platforms (assignee and reviewer usernames). Forgejo
+// is an optional third platform: validation is skipped when no URL is
+// provided, so existing gitlab/github-only configs keep working unchanged.
+// Optional pipeline_timeout fields accept Go duration strings (e.g., "45m",
+// "1h30m") with bounds of 1 minute to 8 hours.
 //
 // Usage:
 //
 //	cfg, err := config.Load()
 //	fmt.Println(cfg.GitLab.Assignee) // "john-doe"
 //	fmt.Println(cfg.GitHub.PipelineTimeout) // "1h"
+//	fmt.Println(cfg.Forgejo.URL) // "https://codeberg.org"
 package config
 
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -39,6 +43,11 @@ var (
 	errGitLabReviewerInvalid = errors.New("gitlab.reviewer contains invalid characters")
 	errGitHubAssigneeInvalid = errors.New("github.assignee contains invalid characters")
 	errGitHubReviewerInvalid = errors.New("github.reviewer contains invalid characters")
+	errForgejoAssigneeEmpty  = errors.New("forgejo.assignee is required")
+	errForgejoReviewerEmpty  = errors.New("forgejo.reviewer is required")
+	errForgejoAssigneeInvalid = errors.New("forgejo.assignee contains invalid characters")
+	errForgejoReviewerInvalid = errors.New("forgejo.reviewer contains invalid characters")
+	errForgejoURLInvalid      = errors.New("forgejo.url is invalid")
 	errInvalidTimeout        = errors.New("invalid timeout format")
 	errTimeoutTooSmall       = errors.New("timeout too small")
 	errTimeoutTooLarge       = errors.New("timeout too large")
@@ -52,24 +61,30 @@ const MaxPipelineTimeout = maxPipelineTimeout
 
 // Export for external error checking with errors.Is().
 var (
-	ErrConfigNotFound        = errConfigNotFound
-	ErrGitLabAssigneeEmpty   = errGitLabAssigneeEmpty
-	ErrGitLabReviewerEmpty   = errGitLabReviewerEmpty
-	ErrGitHubAssigneeEmpty   = errGitHubAssigneeEmpty
-	ErrGitHubReviewerEmpty   = errGitHubReviewerEmpty
-	ErrGitLabAssigneeInvalid = errGitLabAssigneeInvalid
-	ErrGitLabReviewerInvalid = errGitLabReviewerInvalid
-	ErrGitHubAssigneeInvalid = errGitHubAssigneeInvalid
-	ErrGitHubReviewerInvalid = errGitHubReviewerInvalid
-	ErrInvalidTimeout        = errInvalidTimeout
-	ErrTimeoutTooSmall       = errTimeoutTooSmall
-	ErrTimeoutTooLarge       = errTimeoutTooLarge
+	ErrConfigNotFound         = errConfigNotFound
+	ErrGitLabAssigneeEmpty    = errGitLabAssigneeEmpty
+	ErrGitLabReviewerEmpty    = errGitLabReviewerEmpty
+	ErrGitHubAssigneeEmpty    = errGitHubAssigneeEmpty
+	ErrGitHubReviewerEmpty    = errGitHubReviewerEmpty
+	ErrGitLabAssigneeInvalid  = errGitLabAssigneeInvalid
+	ErrGitLabReviewerInvalid  = errGitLabReviewerInvalid
+	ErrGitHubAssigneeInvalid  = errGitHubAssigneeInvalid
+	ErrGitHubReviewerInvalid  = errGitHubReviewerInvalid
+	ErrForgejoAssigneeEmpty   = errForgejoAssigneeEmpty
+	ErrForgejoReviewerEmpty   = errForgejoReviewerEmpty
+	ErrForgejoAssigneeInvalid = errForgejoAssigneeInvalid
+	ErrForgejoReviewerInvalid = errForgejoReviewerInvalid
+	ErrForgejoURLInvalid      = errForgejoURLInvalid
+	ErrInvalidTimeout         = errInvalidTimeout
+	ErrTimeoutTooSmall        = errTimeoutTooSmall
+	ErrTimeoutTooLarge        = errTimeoutTooLarge
 )
 
 // Config represents the complete configuration for auto-mr.
 type Config struct {
-	GitLab GitLabConfig `yaml:"gitlab"`
-	GitHub GitHubConfig `yaml:"github"`
+	GitLab  GitLabConfig  `yaml:"gitlab"`
+	GitHub  GitHubConfig  `yaml:"github"`
+	Forgejo ForgejoConfig `yaml:"forgejo"`
 }
 
 // GitLabConfig contains GitLab-specific configuration.
@@ -81,6 +96,17 @@ type GitLabConfig struct {
 
 // GitHubConfig contains GitHub-specific configuration.
 type GitHubConfig struct {
+	Assignee        string `yaml:"assignee"`
+	Reviewer        string `yaml:"reviewer"`
+	PipelineTimeout string `yaml:"pipeline_timeout,omitempty"`
+}
+
+// ForgejoConfig contains Forgejo-specific configuration.
+// Forgejo is an optional platform: when URL is empty the entire section is
+// skipped during validation, preserving backward compatibility with
+// gitlab/github-only config files.
+type ForgejoConfig struct {
+	URL             string `yaml:"url"`
 	Assignee        string `yaml:"assignee"`
 	Reviewer        string `yaml:"reviewer"`
 	PipelineTimeout string `yaml:"pipeline_timeout,omitempty"`
@@ -134,6 +160,10 @@ func (c *Config) Validate() error {
 	c.GitHub.Assignee = strings.TrimSpace(c.GitHub.Assignee)
 	c.GitHub.Reviewer = strings.TrimSpace(c.GitHub.Reviewer)
 	c.GitHub.PipelineTimeout = strings.TrimSpace(c.GitHub.PipelineTimeout)
+	c.Forgejo.URL = strings.TrimSpace(c.Forgejo.URL)
+	c.Forgejo.Assignee = strings.TrimSpace(c.Forgejo.Assignee)
+	c.Forgejo.Reviewer = strings.TrimSpace(c.Forgejo.Reviewer)
+	c.Forgejo.PipelineTimeout = strings.TrimSpace(c.Forgejo.PipelineTimeout)
 
 	// Validate GitLab configuration
 	if err := validateGitLabConfig(&c.GitLab); err != nil {
@@ -142,6 +172,11 @@ func (c *Config) Validate() error {
 
 	// Validate GitHub configuration
 	if err := validateGitHubConfig(&c.GitHub); err != nil {
+		return err
+	}
+
+	// Validate Forgejo configuration (optional — skipped when URL is empty)
+	if err := validateForgejoConfig(&c.Forgejo); err != nil {
 		return err
 	}
 
@@ -215,6 +250,48 @@ func validateGitHubConfig(config *GitHubConfig) error {
 	}
 
 	if _, err := validateTimeout(config.PipelineTimeout, "github.pipeline_timeout"); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// validateForgejoURL validates that a Forgejo instance URL is well-formed with an
+// http or https scheme and a non-empty host.
+func validateForgejoURL(rawURL string) error {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return fmt.Errorf("%w: '%s'", errForgejoURLInvalid, rawURL)
+	}
+	return nil
+}
+
+// validateForgejoConfig validates Forgejo-specific configuration fields.
+// When config.URL is empty the entire section is skipped (Forgejo is optional).
+func validateForgejoConfig(config *ForgejoConfig) error {
+	if config.URL == "" {
+		return nil // Forgejo is optional; skip when no URL is configured
+	}
+
+	if err := validateForgejoURL(config.URL); err != nil {
+		return err
+	}
+
+	if config.Assignee == "" {
+		return errForgejoAssigneeEmpty
+	}
+	if !isValidUsername(config.Assignee) {
+		return fmt.Errorf("%w: '%s'", errForgejoAssigneeInvalid, config.Assignee)
+	}
+
+	if config.Reviewer == "" {
+		return errForgejoReviewerEmpty
+	}
+	if !isValidUsername(config.Reviewer) {
+		return fmt.Errorf("%w: '%s'", errForgejoReviewerInvalid, config.Reviewer)
+	}
+
+	if _, err := validateTimeout(config.PipelineTimeout, "forgejo.pipeline_timeout"); err != nil {
 		return err
 	}
 

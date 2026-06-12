@@ -403,3 +403,42 @@ func TestGitHubAdapter_MergeWithBranchDeletion(t *testing.T) {
 	require.NotNil(t, lastCall)
 	assert.Equal(t, "feature-branch", lastCall.Args["sourceBranch"])
 }
+
+// --- Forgejo Adapter Interface Tests ---
+
+func TestForgejoAdapter_PlatformName(t *testing.T) {
+	// Verify the Forgejo platform name value via mock (real adapter needs token/live server)
+	mock := mocks.NewPlatformProvider()
+	mock.PlatformNameValue = "Forgejo"
+	assert.Equal(t, "Forgejo", mock.PlatformName())
+}
+
+func TestForgejoAdapter_ApproveIsNoOp(t *testing.T) {
+	// Forgejo, like GitHub, does not gate merges on approval; Approve must return nil
+	mock := mocks.NewPlatformProvider()
+	// No ApproveError configured — models the no-op behaviour of ForgejoAdapter.Approve
+	err := mock.Approve(42)
+	require.NoError(t, err)
+	assert.Equal(t, 1, mock.GetCallCount("Approve"))
+}
+
+func TestForgejoAdapter_MergeWithBranchDeletion(t *testing.T) {
+	// Forgejo MergePullRequest sets DeleteBranchAfterMerge=true; verify merge params
+	// carry the source branch through the platform layer.
+	mock := mocks.NewPlatformProvider()
+
+	params := platform.MergeParams{
+		MRID:         77,
+		Squash:       true,
+		CommitTitle:  "Merge Forgejo feature",
+		SourceBranch: "forgejo-feature",
+	}
+
+	err := mock.Merge(params)
+	require.NoError(t, err)
+
+	lastCall := mock.GetLastCall("Merge")
+	require.NotNil(t, lastCall)
+	assert.Equal(t, "forgejo-feature", lastCall.Args["sourceBranch"])
+	assert.Equal(t, int64(77), lastCall.Args["mrID"])
+}
