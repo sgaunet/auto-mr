@@ -12,6 +12,14 @@ const (
 	defaultBody     = "Test body"
 )
 
+// Shared label names used across GitHub, GitLab, and platform fixtures.
+const (
+	labelBug           = "bug"
+	labelEnhancement   = "enhancement"
+	labelDocumentation = "documentation"
+	labelHelpWanted    = "help wanted"
+)
+
 // ValidPlatformMergeRequest returns a valid platform MergeRequest for testing.
 func ValidPlatformMergeRequest() *platform.MergeRequest {
 	return &platform.MergeRequest{
@@ -24,10 +32,10 @@ func ValidPlatformMergeRequest() *platform.MergeRequest {
 // ValidPlatformLabels returns a list of valid platform labels for testing.
 func ValidPlatformLabels() []platform.Label {
 	return []platform.Label{
-		{Name: "bug"},
-		{Name: "enhancement"},
-		{Name: "documentation"},
-		{Name: "help wanted"},
+		{Name: labelBug},
+		{Name: labelEnhancement},
+		{Name: labelDocumentation},
+		{Name: labelHelpWanted},
 	}
 }
 
@@ -38,7 +46,7 @@ func ValidCreateParams() platform.CreateParams {
 		TargetBranch: defaultTargetBr,
 		Title:        defaultTitle,
 		Body:         defaultBody,
-		Labels:       []string{"bug"},
+		Labels:       []string{labelBug},
 		Squash:       true,
 	}
 }

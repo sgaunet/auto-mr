@@ -1,6 +1,7 @@
 package mocks
 
 import (
+	"slices"
 	"sync"
 	"time"
 
@@ -14,19 +15,19 @@ type GitLabAPIClient struct {
 	calls []MethodCall
 
 	// Configurable responses
-	SetProjectFromURLError         error
-	ListLabelsResponse             []*glpkg.Label
-	ListLabelsError                error
-	CreateMergeRequestResponse     *gitlab.MergeRequest
-	CreateMergeRequestError        error
-	GetMergeRequestByBranchResponse *gitlab.MergeRequest
-	GetMergeRequestByBranchError   error
-	WaitForPipelineStatus          string
-	WaitForPipelineError           error
-	ApproveMergeRequestError       error
-	MergeMergeRequestError         error
+	SetProjectFromURLError           error
+	ListLabelsResponse               []*glpkg.Label
+	ListLabelsError                  error
+	CreateMergeRequestResponse       *gitlab.MergeRequest
+	CreateMergeRequestError          error
+	GetMergeRequestByBranchResponse  *gitlab.MergeRequest
+	GetMergeRequestByBranchError     error
+	WaitForPipelineStatus            string
+	WaitForPipelineError             error
+	ApproveMergeRequestError         error
+	MergeMergeRequestError           error
 	GetMergeRequestsByBranchResponse []*gitlab.BasicMergeRequest
-	GetMergeRequestsByBranchError  error
+	GetMergeRequestsByBranchError    error
 }
 
 // NewGitLabAPIClient creates a new mock GitLab API client.
@@ -56,14 +57,14 @@ func (m *GitLabAPIClient) CreateMergeRequest(
 	labels []string, squash bool,
 ) (*gitlab.MergeRequest, error) {
 	m.trackCall("CreateMergeRequest", map[string]any{
-		"sourceBranch": sourceBranch,
-		"targetBranch": targetBranch,
-		"title":        title,
-		"description":  description,
-		"assignee":     assignee,
-		"reviewer":     reviewer,
-		"labels":       labels,
-		"squash":       squash,
+		argSourceBranch: sourceBranch,
+		argTargetBranch: targetBranch,
+		argTitle:        title,
+		"description":   description,
+		"assignee":      assignee,
+		"reviewer":      reviewer,
+		argLabels:       labels,
+		argSquash:       squash,
 	})
 	return m.CreateMergeRequestResponse, m.CreateMergeRequestError
 }
@@ -71,8 +72,8 @@ func (m *GitLabAPIClient) CreateMergeRequest(
 // GetMergeRequestByBranch implements gitlab.APIClient.
 func (m *GitLabAPIClient) GetMergeRequestByBranch(sourceBranch, targetBranch string) (*gitlab.MergeRequest, error) {
 	m.trackCall("GetMergeRequestByBranch", map[string]any{
-		"sourceBranch": sourceBranch,
-		"targetBranch": targetBranch,
+		argSourceBranch: sourceBranch,
+		argTargetBranch: targetBranch,
 	})
 	return m.GetMergeRequestByBranchResponse, m.GetMergeRequestByBranchError
 }
@@ -80,7 +81,7 @@ func (m *GitLabAPIClient) GetMergeRequestByBranch(sourceBranch, targetBranch str
 // WaitForPipeline implements gitlab.APIClient.
 func (m *GitLabAPIClient) WaitForPipeline(timeout time.Duration) (string, error) {
 	m.trackCall("WaitForPipeline", map[string]any{
-		"timeout": timeout,
+		argTimeout: timeout,
 	})
 	return m.WaitForPipelineStatus, m.WaitForPipelineError
 }
@@ -96,9 +97,9 @@ func (m *GitLabAPIClient) ApproveMergeRequest(mrIID int64) error {
 // MergeMergeRequest implements gitlab.APIClient.
 func (m *GitLabAPIClient) MergeMergeRequest(mrIID int64, squash bool, commitTitle string) error {
 	m.trackCall("MergeMergeRequest", map[string]any{
-		"mrIID":       mrIID,
-		"squash":      squash,
-		"commitTitle": commitTitle,
+		"mrIID":        mrIID,
+		argSquash:      squash,
+		argCommitTitle: commitTitle,
 	})
 	return m.MergeMergeRequestError
 }
@@ -106,7 +107,7 @@ func (m *GitLabAPIClient) MergeMergeRequest(mrIID int64, squash bool, commitTitl
 // GetMergeRequestsByBranch implements gitlab.APIClient.
 func (m *GitLabAPIClient) GetMergeRequestsByBranch(sourceBranch string) ([]*gitlab.BasicMergeRequest, error) {
 	m.trackCall("GetMergeRequestsByBranch", map[string]any{
-		"sourceBranch": sourceBranch,
+		argSourceBranch: sourceBranch,
 	})
 	return m.GetMergeRequestsByBranchResponse, m.GetMergeRequestsByBranchError
 }
@@ -135,9 +136,9 @@ func (m *GitLabAPIClient) GetCallCount(method string) int {
 func (m *GitLabAPIClient) GetLastCall(method string) *MethodCall {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for i := len(m.calls) - 1; i >= 0; i-- {
-		if m.calls[i].Method == method {
-			return &m.calls[i]
+	for _, v := range slices.Backward(m.calls) {
+		if v.Method == method {
+			return &v
 		}
 	}
 	return nil
