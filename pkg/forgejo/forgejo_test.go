@@ -37,6 +37,34 @@ func TestNewClientMissingToken(t *testing.T) {
 	}
 }
 
+// TestNewClientWhitespaceTokenTrimmed verifies that a whitespace-only FORGEJO_TOKEN
+// is trimmed to empty and reported as missing, rather than producing an invalid
+// Authorization header. This guards against the gitea SDK rejecting a token with a
+// trailing newline ("net/http: invalid header field value for Authorization").
+func TestNewClientWhitespaceTokenTrimmed(t *testing.T) {
+	original := os.Getenv("FORGEJO_TOKEN")
+	if err := os.Setenv("FORGEJO_TOKEN", "   \n\t "); err != nil {
+		t.Fatalf("failed to set FORGEJO_TOKEN: %v", err)
+	}
+
+	defer func() {
+		if original == "" {
+			if err := os.Unsetenv("FORGEJO_TOKEN"); err != nil {
+				t.Errorf("failed to unset FORGEJO_TOKEN: %v", err)
+			}
+			return
+		}
+		if err := os.Setenv("FORGEJO_TOKEN", original); err != nil {
+			t.Errorf("failed to restore FORGEJO_TOKEN: %v", err)
+		}
+	}()
+
+	_, err := forgejo.NewClient("https://forgejo.example.com")
+	if !errors.Is(err, forgejo.ErrTokenRequired) {
+		t.Errorf("expected ErrTokenRequired for whitespace-only token, got: %v", err)
+	}
+}
+
 // TestNewClientWithToken verifies that NewClient does not return ErrTokenRequired
 // when FORGEJO_TOKEN is set. The SDK performs a live version check on the base URL,
 // so this test skips when the example host is unreachable.

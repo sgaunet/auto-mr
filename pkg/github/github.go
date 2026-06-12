@@ -27,6 +27,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/google/go-github/v69/github"
@@ -40,7 +41,7 @@ import (
 //
 // Returns [ErrTokenRequired] if GITHUB_TOKEN is not set.
 func NewClient() (*Client, error) {
-	token := os.Getenv("GITHUB_TOKEN")
+	token := strings.TrimSpace(os.Getenv("GITHUB_TOKEN"))
 	if token == "" {
 		return nil, errTokenRequired
 	}
