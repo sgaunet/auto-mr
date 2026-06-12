@@ -21,20 +21,20 @@ const (
 // ValidPullRequest returns a valid GitHub pull request for testing.
 func ValidPullRequest() *github.PullRequest {
 	return &github.PullRequest{
-		Number: github.Ptr(defaultPRNumber),
-		Title:  github.Ptr("Test Pull Request"),
-		State:  github.Ptr("open"),
+		Number: new(defaultPRNumber),
+		Title:  new("Test Pull Request"),
+		State:  new("open"),
 		Head: &github.PullRequestBranch{
-			Ref: github.Ptr("feature-branch"),
-			SHA: github.Ptr("abc123def456"),
+			Ref: new("feature-branch"),
+			SHA: new("abc123def456"),
 		},
 		Base: &github.PullRequestBranch{
-			Ref: github.Ptr("main"),
+			Ref: new("main"),
 		},
 		User: &github.User{
-			Login: github.Ptr("testuser"),
+			Login: new("testuser"),
 		},
-		HTMLURL: github.Ptr("https://github.com/owner/repo/pull/123"),
+		HTMLURL: new("https://github.com/owner/repo/pull/123"),
 	}
 }
 
@@ -43,13 +43,13 @@ func SuccessfulCheckRun(id int64, name string) *github.CheckRun {
 	now := time.Now()
 	completed := now.Add(successfulCheckDuration)
 	return &github.CheckRun{
-		ID:         github.Ptr(id),
-		Name:       github.Ptr(name),
-		Status:     github.Ptr("completed"),
-		Conclusion: github.Ptr("success"),
-		StartedAt:  &github.Timestamp{Time: now},
+		ID:          new(id),
+		Name:        new(name),
+		Status:      new("completed"),
+		Conclusion:  new("success"),
+		StartedAt:   &github.Timestamp{Time: now},
 		CompletedAt: &github.Timestamp{Time: completed},
-		HTMLURL:    github.Ptr("https://github.com/owner/repo/runs/123"),
+		HTMLURL:     new("https://github.com/owner/repo/runs/123"),
 	}
 }
 
@@ -58,13 +58,13 @@ func FailedCheckRun(id int64, name string) *github.CheckRun {
 	now := time.Now()
 	completed := now.Add(failedCheckDuration)
 	return &github.CheckRun{
-		ID:         github.Ptr(id),
-		Name:       github.Ptr(name),
-		Status:     github.Ptr("completed"),
-		Conclusion: github.Ptr("failure"),
-		StartedAt:  &github.Timestamp{Time: now},
+		ID:          new(id),
+		Name:        new(name),
+		Status:      new("completed"),
+		Conclusion:  new("failure"),
+		StartedAt:   &github.Timestamp{Time: now},
 		CompletedAt: &github.Timestamp{Time: completed},
-		HTMLURL:    github.Ptr("https://github.com/owner/repo/runs/456"),
+		HTMLURL:     new("https://github.com/owner/repo/runs/456"),
 	}
 }
 
@@ -72,21 +72,21 @@ func FailedCheckRun(id int64, name string) *github.CheckRun {
 func RunningCheckRun(id int64, name string) *github.CheckRun {
 	now := time.Now()
 	return &github.CheckRun{
-		ID:        github.Ptr(id),
-		Name:      github.Ptr(name),
-		Status:    github.Ptr("in_progress"),
+		ID:        new(id),
+		Name:      new(name),
+		Status:    new("in_progress"),
 		StartedAt: &github.Timestamp{Time: now},
-		HTMLURL:   github.Ptr("https://github.com/owner/repo/runs/789"),
+		HTMLURL:   new("https://github.com/owner/repo/runs/789"),
 	}
 }
 
 // QueuedCheckRun returns a queued GitHub check run for testing.
 func QueuedCheckRun(id int64, name string) *github.CheckRun {
 	return &github.CheckRun{
-		ID:      github.Ptr(id),
-		Name:    github.Ptr(name),
-		Status:  github.Ptr("queued"),
-		HTMLURL: github.Ptr("https://github.com/owner/repo/runs/101"),
+		ID:      new(id),
+		Name:    new(name),
+		Status:  new("queued"),
+		HTMLURL: new("https://github.com/owner/repo/runs/101"),
 	}
 }
 
@@ -95,13 +95,13 @@ func SkippedCheckRun(id int64, name string) *github.CheckRun {
 	now := time.Now()
 	completed := now.Add(1 * time.Minute)
 	return &github.CheckRun{
-		ID:         github.Ptr(id),
-		Name:       github.Ptr(name),
-		Status:     github.Ptr("completed"),
-		Conclusion: github.Ptr("skipped"),
-		StartedAt:  &github.Timestamp{Time: now},
+		ID:          new(id),
+		Name:        new(name),
+		Status:      new("completed"),
+		Conclusion:  new("skipped"),
+		StartedAt:   &github.Timestamp{Time: now},
 		CompletedAt: &github.Timestamp{Time: completed},
-		HTMLURL:    github.Ptr("https://github.com/owner/repo/runs/202"),
+		HTMLURL:     new("https://github.com/owner/repo/runs/202"),
 	}
 }
 
@@ -138,10 +138,10 @@ func ValidLabels() []*ghpkg.Label {
 // WorkflowRun returns a GitHub workflow run for testing.
 func WorkflowRun(id int64, status, conclusion string) *github.WorkflowRun {
 	return &github.WorkflowRun{
-		ID:         github.Ptr(id),
-		Status:     github.Ptr(status),
-		Conclusion: github.Ptr(conclusion),
-		HeadSHA:    github.Ptr("abc123def456"),
+		ID:         new(id),
+		Status:     new(status),
+		Conclusion: new(conclusion),
+		HeadSHA:    new("abc123def456"),
 	}
 }
 
@@ -149,13 +149,13 @@ func WorkflowRun(id int64, status, conclusion string) *github.WorkflowRun {
 func WorkflowJob(id int64, name, status, conclusion string) *github.WorkflowJob {
 	now := time.Now()
 	job := &github.WorkflowJob{
-		ID:     github.Ptr(id),
-		Name:   github.Ptr(name),
-		Status: github.Ptr(status),
+		ID:     new(id),
+		Name:   new(name),
+		Status: new(status),
 	}
 
 	if conclusion != "" {
-		job.Conclusion = github.Ptr(conclusion)
+		job.Conclusion = new(conclusion)
 		completed := now.Add(defaultWorkflowJobMinutes * time.Minute)
 		job.StartedAt = &github.Timestamp{Time: now}
 		job.CompletedAt = &github.Timestamp{Time: completed}

@@ -88,10 +88,10 @@ func (c *Client) CreatePullRequest(
 	c.log.Debug(fmt.Sprintf("Creating pull request from %s to %s", head, base))
 
 	newPR := &github.NewPullRequest{
-		Title: github.Ptr(title),
-		Head:  github.Ptr(head),
-		Base:  github.Ptr(base),
-		Body:  github.Ptr(body),
+		Title: new(title),
+		Head:  new(head),
+		Base:  new(base),
+		Body:  new(body),
 	}
 
 	pr, _, err := c.client.PullRequests.Create(c.ctx(), c.owner, c.repo, newPR)
@@ -168,7 +168,7 @@ func (c *Client) MergePullRequest(prNumber int, mergeMethod, commitTitle string)
 	c.log.Debug(fmt.Sprintf("Merging pull request #%d using method: %s", prNumber, mergeMethod))
 	options := &github.PullRequestOptions{
 		MergeMethod: mergeMethod, // "squash", "merge", or "rebase"
-		CommitTitle: commitTitle,  // Use selected commit title as merge commit title
+		CommitTitle: commitTitle, // Use selected commit title as merge commit title
 	}
 
 	// Pass commit title as the merge commit message
