@@ -14,7 +14,7 @@
 //	repo, err := git.OpenRepository(".")
 //	repo.SetLogger(logger)
 //	branch, _ := repo.GetCurrentBranch()
-//	platform, _ := repo.DetectPlatform()
+//	platform, _ := repo.DetectPlatform("https://git.example.com")
 //	repo.PushBranch(branch)
 //
 // Thread Safety: [Repository] is not safe for concurrent use.
@@ -27,6 +27,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"net/url"
 	"strings"
 	"time"
 
@@ -53,13 +54,18 @@ const (
 
 	// minSymrefFields is the minimum number of fields expected in "git ls-remote --symref" output.
 	minSymrefFields = 2
+
+	// debugAuthMethod, debugAuthURL and debugAuthToken are map keys/values used in DebugAuth calls.
+	debugAuthMethod = "method"
+	debugAuthURL    = "url"
+	debugAuthToken  = "token"
 )
 
 var (
 	errMainBranchNotFound  = errors.New("could not determine main branch")
 	errHEADNotBranch       = errors.New("HEAD is not pointing to a branch")
 	errNoRemoteURLs        = errors.New("no URLs found for origin remote")
-	errUnsupportedPlatform = errors.New("repository is not hosted on GitLab or GitHub")
+	errUnsupportedPlatform = errors.New("repository is not hosted on GitLab, GitHub, or Forgejo")
 	errStopIteration       = errors.New("stop iteration")
 	errNoSSHKeys           = errors.New("no SSH keys found in ~/.ssh")
 	errNotGitRepository    = errors.New("not a git repository (or any parent up to mount point)")
@@ -114,6 +120,8 @@ const (
 	PlatformGitLab Platform = "gitlab"
 	// PlatformGitHub represents GitHub hosting.
 	PlatformGitHub Platform = "github"
+	// PlatformForgejo represents Forgejo (self-hosted Gitea fork) hosting.
+	PlatformForgejo Platform = "forgejo"
 )
 
 // findGitRoot searches for the git repository root starting from the given path.
@@ -231,12 +239,13 @@ func getAuth(repo *git.Repository, logger *bullets.Logger) (*authMethod, error) 
 
 // getHTTPSAuth returns HTTP authentication for HTTPS URLs.
 func getHTTPSAuth(url string, logger *bullets.Logger) (*authMethod, error) {
-	if strings.Contains(url, "gitlab.com") {
+	switch {
+	case strings.Contains(url, "gitlab.com"):
 		if tokenStr := os.Getenv("GITLAB_TOKEN"); tokenStr != "" {
 			token := security.NewSecureToken(tokenStr)
 			security.DebugAuth(logger, "GitLab", map[string]string{
-				"method": "token",
-				"url":    url,
+				debugAuthMethod: debugAuthToken,
+				debugAuthURL:    url,
 			})
 			return &authMethod{method: &http.BasicAuth{
 				Username: "oauth2",
@@ -244,12 +253,12 @@ func getHTTPSAuth(url string, logger *bullets.Logger) (*authMethod, error) {
 			}}, nil
 		}
 		logger.Debug("GITLAB_TOKEN not found")
-	} else if strings.Contains(url, "github.com") {
+	case strings.Contains(url, "github.com"):
 		if tokenStr := os.Getenv("GITHUB_TOKEN"); tokenStr != "" {
 			token := security.NewSecureToken(tokenStr)
 			security.DebugAuth(logger, "GitHub", map[string]string{
-				"method": "token",
-				"url":    url,
+				debugAuthMethod: debugAuthToken,
+				debugAuthURL:    url,
 			})
 			return &authMethod{method: &http.BasicAuth{
 				Username: "x-access-token",
@@ -257,6 +266,20 @@ func getHTTPSAuth(url string, logger *bullets.Logger) (*authMethod, error) {
 			}}, nil
 		}
 		logger.Debug("GITHUB_TOKEN not found")
+	default:
+		// Forgejo / self-hosted Gitea: any URL that is neither gitlab.com nor github.com.
+		if tokenStr := os.Getenv("FORGEJO_TOKEN"); tokenStr != "" {
+			token := security.NewSecureToken(tokenStr)
+			security.DebugAuth(logger, "Forgejo", map[string]string{
+				debugAuthMethod: debugAuthToken,
+				debugAuthURL:    url,
+			})
+			return &authMethod{method: &http.BasicAuth{
+				Username: "forgejo",
+				Password: token.Value(), // Extract actual token only for authentication
+			}}, nil
+		}
+		logger.Debug("FORGEJO_TOKEN not found")
 	}
 	return &authMethod{method: &noAuthMethod{}}, nil // No token available, try without auth
 }
@@ -397,12 +420,17 @@ func (r *Repository) HasStagedChanges() (bool, error) {
 	return false, nil
 }
 
-// DetectPlatform determines if the repository is hosted on GitLab or GitHub
-// by inspecting the origin remote URL for "gitlab.com" or "github.com".
+// DetectPlatform determines if the repository is hosted on GitLab, GitHub, or Forgejo
+// by inspecting the origin remote URL.
 //
-// Returns [PlatformGitLab] or [PlatformGitHub].
-// Returns errUnsupportedPlatform if the URL contains neither.
-func (r *Repository) DetectPlatform() (Platform, error) {
+// Detection order:
+//  1. "gitlab.com" in remote URL → [PlatformGitLab]
+//  2. "github.com" in remote URL → [PlatformGitHub]
+//  3. If forgejoURL is non-empty, the host extracted from forgejoURL is matched
+//     against the remote URL → [PlatformForgejo]
+//
+// Returns errUnsupportedPlatform if no platform can be identified.
+func (r *Repository) DetectPlatform(forgejoURL string) (Platform, error) {
 	remote, err := r.repo.Remote("origin")
 	if err != nil {
 		return "", fmt.Errorf("failed to get origin remote: %w", err)
@@ -413,15 +441,39 @@ func (r *Repository) DetectPlatform() (Platform, error) {
 		return "", errNoRemoteURLs
 	}
 
-	url := urls[0]
-	if strings.Contains(url, "gitlab.com") {
+	remoteURL := urls[0]
+	if strings.Contains(remoteURL, "gitlab.com") {
 		return PlatformGitLab, nil
 	}
-	if strings.Contains(url, "github.com") {
+	if strings.Contains(remoteURL, "github.com") {
 		return PlatformGitHub, nil
 	}
 
+	if forgejoURL != "" {
+		host := extractHost(forgejoURL)
+		if host != "" && strings.Contains(remoteURL, host) {
+			return PlatformForgejo, nil
+		}
+	}
+
 	return "", errUnsupportedPlatform
+}
+
+// extractHost returns the hostname from a URL string.
+// It uses net/url.Parse; if that fails or yields no host, it strips the scheme
+// prefix as a fallback.
+func extractHost(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err == nil && parsed.Host != "" {
+		return parsed.Host
+	}
+	// Fallback: strip scheme (e.g. "https://") manually.
+	_, remainder, found := strings.Cut(rawURL, "://")
+	if !found {
+		return rawURL
+	}
+	host, _, _ := strings.Cut(remainder, "/")
+	return host
 }
 
 // PushBranch pushes the specified branch to the origin remote.

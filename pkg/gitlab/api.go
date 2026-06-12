@@ -91,7 +91,7 @@ func (c *Client) ListLabels() ([]*Label, error) {
 	c.log.Debug("Listing GitLab labels")
 
 	labels, _, err := c.client.Labels.ListLabels(c.projectID, &gitlab.ListLabelsOptions{
-		IncludeAncestorGroups: gitlab.Ptr(true),
+		IncludeAncestorGroups: new(true),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list labels: %w", err)
@@ -155,8 +155,8 @@ func (c *Client) CreateMergeRequest(
 		AssigneeID:         &assigneeID,
 		ReviewerIDs:        &reviewerIDs,
 		Labels:             labelOptions,
-		Squash:             gitlab.Ptr(squash),
-		RemoveSourceBranch: gitlab.Ptr(true),
+		Squash:             new(squash),
+		RemoveSourceBranch: new(true),
 	}
 
 	mr, _, err := c.client.MergeRequests.CreateMergeRequest(c.projectID, createOptions)
@@ -183,7 +183,7 @@ func (c *Client) CreateMergeRequest(
 // Returns [ErrMRNotFound] if no open MR matches the given branches.
 func (c *Client) GetMergeRequestByBranch(sourceBranch, targetBranch string) (*gitlab.MergeRequest, error) {
 	mrs, _, err := c.client.MergeRequests.ListProjectMergeRequests(c.projectID, &gitlab.ListProjectMergeRequestsOptions{
-		State:        gitlab.Ptr("opened"),
+		State:        new("opened"),
 		SourceBranch: &sourceBranch,
 		TargetBranch: &targetBranch,
 	})
@@ -301,15 +301,15 @@ func (c *Client) MergeMergeRequest(mrIID int64, squash bool, commitTitle string)
 	c.log.Debug(fmt.Sprintf("Merging merge request, IID: %d", mrIID))
 
 	mergeOptions := &gitlab.AcceptMergeRequestOptions{
-		Squash:                   gitlab.Ptr(squash),
-		ShouldRemoveSourceBranch: gitlab.Ptr(true),
+		Squash:                   new(squash),
+		ShouldRemoveSourceBranch: new(true),
 	}
 
 	// Set commit message based on squash mode
 	if squash {
-		mergeOptions.SquashCommitMessage = gitlab.Ptr(commitTitle)
+		mergeOptions.SquashCommitMessage = new(commitTitle)
 	} else {
-		mergeOptions.MergeCommitMessage = gitlab.Ptr(commitTitle)
+		mergeOptions.MergeCommitMessage = new(commitTitle)
 	}
 
 	_, _, err := c.client.MergeRequests.AcceptMergeRequest(c.projectID, mrIID, mergeOptions)
@@ -325,7 +325,7 @@ func (c *Client) MergeMergeRequest(mrIID int64, squash bool, commitTitle string)
 func (c *Client) GetMergeRequestsByBranch(sourceBranch string) ([]*gitlab.BasicMergeRequest, error) {
 	mrs, _, err := c.client.MergeRequests.ListProjectMergeRequests(c.projectID, &gitlab.ListProjectMergeRequestsOptions{
 		SourceBranch: &sourceBranch,
-		State:        gitlab.Ptr("opened"),
+		State:        new("opened"),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list merge requests: %w", err)
@@ -517,7 +517,7 @@ func (c *Client) hasPipelineRuns() bool {
 	pipelines, _, err := c.client.Pipelines.ListProjectPipelines(
 		c.projectID,
 		&gitlab.ListProjectPipelinesOptions{
-			SHA: gitlab.Ptr(c.mrSHA),
+			SHA: new(c.mrSHA),
 		},
 	)
 	if err != nil {

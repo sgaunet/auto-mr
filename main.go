@@ -49,9 +49,9 @@ var version = "dev"
 
 var rootCmd = &cobra.Command{
 	Use:   "auto-mr",
-	Short: "Automated merge request tool for GitLab and GitHub",
+	Short: "Automated merge request tool for GitLab, GitHub, and Forgejo",
 	Long: `auto-mr automates the process of creating and merging pull/merge requests
-on GitLab and GitHub repositories. It handles pipeline waiting, auto-approval,
+on GitLab, GitHub, and Forgejo repositories. It handles pipeline waiting, auto-approval,
 and branch cleanup.`,
 	Run: func(cmd *cobra.Command, _ []string) {
 		if showVersion {
@@ -135,6 +135,11 @@ func formatConfigError(err error) error {
 		return timeoutErr
 	}
 
+	// Check for Forgejo-specific errors
+	if forgejoErr := formatForgejoConfigError(err, configPath); forgejoErr != nil {
+		return forgejoErr
+	}
+
 	switch {
 	case errors.Is(err, config.ErrConfigNotFound):
 		return fmt.Errorf("%w\n\n"+
@@ -145,7 +150,11 @@ func formatConfigError(err error) error {
 			"  reviewer: reviewer-gitlab-username\n"+
 			"github:\n"+
 			"  assignee: your-github-username\n"+
-			"  reviewer: reviewer-github-username",
+			"  reviewer: reviewer-github-username\n"+
+			"forgejo:\n"+
+			"  url: https://forgejo.example.com\n"+
+			"  assignee: your-forgejo-username\n"+
+			"  reviewer: reviewer-forgejo-username",
 			err, configPath)
 
 	case errors.Is(err, config.ErrGitLabAssigneeEmpty):
@@ -163,7 +172,9 @@ func formatConfigError(err error) error {
 	case errors.Is(err, config.ErrGitLabAssigneeInvalid),
 		errors.Is(err, config.ErrGitLabReviewerInvalid),
 		errors.Is(err, config.ErrGitHubAssigneeInvalid),
-		errors.Is(err, config.ErrGitHubReviewerInvalid):
+		errors.Is(err, config.ErrGitHubReviewerInvalid),
+		errors.Is(err, config.ErrForgejoAssigneeInvalid),
+		errors.Is(err, config.ErrForgejoReviewerInvalid):
 		return fmt.Errorf("%w\n\n"+
 			"Config file: %s\n"+
 			"Usernames must:\n"+
@@ -174,6 +185,28 @@ func formatConfigError(err error) error {
 
 	default:
 		return fmt.Errorf("failed to load configuration: %w\n\nConfig file: %s", err, configPath)
+	}
+}
+
+// formatForgejoConfigError handles Forgejo-specific configuration error formatting.
+// Returns nil when err is not a Forgejo configuration error.
+func formatForgejoConfigError(err error, configPath string) error {
+	switch {
+	case errors.Is(err, config.ErrForgejoAssigneeEmpty):
+		return fmt.Errorf("%w\n\nConfig file: %s\nAdd: forgejo.assignee", err, configPath)
+
+	case errors.Is(err, config.ErrForgejoReviewerEmpty):
+		return fmt.Errorf("%w\n\nConfig file: %s\nAdd: forgejo.reviewer", err, configPath)
+
+	case errors.Is(err, config.ErrForgejoURLInvalid):
+		return fmt.Errorf("%w\n\n"+
+			"Config file: %s\n"+
+			"forgejo.url must be a valid http or https URL\n"+
+			"  Example: https://forgejo.example.com",
+			err, configPath)
+
+	default:
+		return nil // Not a Forgejo config error
 	}
 }
 
@@ -221,7 +254,7 @@ func runAutoMR(cmd *cobra.Command, useManualLabels bool, manualLabelsValue strin
 	}
 	repo.SetLogger(log)
 
-	detectedPlatform, err := repo.DetectPlatform()
+	detectedPlatform, err := repo.DetectPlatform(cfg.Forgejo.URL)
 	if err != nil {
 		return fmt.Errorf("failed to detect platform: %w", err)
 	}

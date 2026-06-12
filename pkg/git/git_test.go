@@ -371,7 +371,7 @@ func TestOpenRepository_Worktree(t *testing.T) {
 	}
 
 	// Assert: DetectPlatform works (reads shared remote config)
-	platform, err := repo.DetectPlatform()
+	platform, err := repo.DetectPlatform("")
 	if err != nil {
 		t.Fatalf("Failed to detect platform from worktree: %v", err)
 	}
@@ -403,4 +403,77 @@ func TestOpenRepository_Worktree(t *testing.T) {
 	}
 
 	t.Logf("Worktree branch: %s, platform: %s, commit: %s", branch, platform, commit.Message)
+}
+
+// initTestRepoWithRemote creates a git repository whose origin remote is set to the given URL.
+func initTestRepoWithRemote(t *testing.T, path, remoteURL string) {
+	t.Helper()
+	repo, err := gogit.PlainInit(path, false)
+	if err != nil {
+		t.Fatalf("Failed to initialize git repository: %v", err)
+	}
+	_, err = repo.CreateRemote(&config.RemoteConfig{
+		Name: "origin",
+		URLs: []string{remoteURL},
+	})
+	if err != nil {
+		t.Fatalf("Failed to create remote origin: %v", err)
+	}
+}
+
+// TestDetectPlatform_Forgejo_HTTPS verifies that an HTTPS Forgejo remote is detected
+// when the configured forgejoURL host matches the remote URL.
+func TestDetectPlatform_Forgejo_HTTPS(t *testing.T) {
+	tmpDir := t.TempDir()
+	initTestRepoWithRemote(t, tmpDir, "https://git.example.com/owner/repo.git")
+
+	repo, err := git.OpenRepository(tmpDir)
+	if err != nil {
+		t.Fatalf("OpenRepository: %v", err)
+	}
+
+	platform, err := repo.DetectPlatform("https://git.example.com")
+	if err != nil {
+		t.Fatalf("DetectPlatform: %v", err)
+	}
+	if platform != git.PlatformForgejo {
+		t.Errorf("Expected platform %q, got %q", git.PlatformForgejo, platform)
+	}
+}
+
+// TestDetectPlatform_Forgejo_SSH verifies that an SSH Forgejo remote is detected
+// when the configured forgejoURL host matches the remote URL.
+func TestDetectPlatform_Forgejo_SSH(t *testing.T) {
+	tmpDir := t.TempDir()
+	initTestRepoWithRemote(t, tmpDir, "git@git.example.com:owner/repo.git")
+
+	repo, err := git.OpenRepository(tmpDir)
+	if err != nil {
+		t.Fatalf("OpenRepository: %v", err)
+	}
+
+	platform, err := repo.DetectPlatform("https://git.example.com")
+	if err != nil {
+		t.Fatalf("DetectPlatform: %v", err)
+	}
+	if platform != git.PlatformForgejo {
+		t.Errorf("Expected platform %q, got %q", git.PlatformForgejo, platform)
+	}
+}
+
+// TestDetectPlatform_Forgejo_EmptyURL verifies that without a forgejoURL, a non-github/gitlab
+// remote returns errUnsupportedPlatform.
+func TestDetectPlatform_Forgejo_EmptyURL(t *testing.T) {
+	tmpDir := t.TempDir()
+	initTestRepoWithRemote(t, tmpDir, "https://git.example.com/owner/repo.git")
+
+	repo, err := git.OpenRepository(tmpDir)
+	if err != nil {
+		t.Fatalf("OpenRepository: %v", err)
+	}
+
+	_, err = repo.DetectPlatform("")
+	if err == nil {
+		t.Fatal("Expected unsupported-platform error, got nil")
+	}
 }
