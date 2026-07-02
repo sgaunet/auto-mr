@@ -447,6 +447,12 @@ func TestDetectPlatform_Forgejo_SSH(t *testing.T) {
 	tmpDir := t.TempDir()
 	initTestRepoWithRemote(t, tmpDir, "git@git.example.com:owner/repo.git")
 
+	// Provide a dummy SSH key so auth setup succeeds without relying on the
+	// host machine's real ~/.ssh (absent on CI runners).
+	homeDir := t.TempDir()
+	writeDummySSHKey(t, homeDir)
+	t.Setenv("HOME", homeDir)
+
 	repo, err := git.OpenRepository(tmpDir)
 	if err != nil {
 		t.Fatalf("OpenRepository: %v", err)

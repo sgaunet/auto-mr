@@ -2,14 +2,19 @@ package git_test
 
 import (
 	"bytes"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/pem"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/sgaunet/auto-mr/pkg/git"
 	"github.com/sgaunet/bullets"
+	"golang.org/x/crypto/ssh"
 )
 
 // TestHTTPSAuth_NoTokenLeakage verifies that tokens don't leak through authentication logging.
@@ -88,11 +93,44 @@ func TestHTTPSAuth_NoTokenLeakage(t *testing.T) {
 	}
 }
 
+// writeDummySSHKey generates a throwaway ed25519 key pair under home/.ssh/id_ed25519
+// so setupSSHAuth's file-based fallback succeeds in environments (e.g. CI runners)
+// that have no real SSH agent or keys configured.
+func writeDummySSHKey(t *testing.T, home string) {
+	t.Helper()
+
+	sshDir := filepath.Join(home, ".ssh")
+	if err := os.MkdirAll(sshDir, 0700); err != nil {
+		t.Fatalf("Failed to create .ssh dir: %v", err)
+	}
+
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("Failed to generate dummy SSH key: %v", err)
+	}
+
+	block, err := ssh.MarshalPrivateKey(priv, "")
+	if err != nil {
+		t.Fatalf("Failed to marshal dummy SSH key: %v", err)
+	}
+
+	keyPath := filepath.Join(sshDir, "id_ed25519")
+	if err := os.WriteFile(keyPath, pem.EncodeToMemory(block), 0600); err != nil {
+		t.Fatalf("Failed to write dummy SSH key: %v", err)
+	}
+}
+
 // TestSSHAuth_NoPathLeakage verifies that SSH key paths are masked in logs.
 func TestSSHAuth_NoPathLeakage(t *testing.T) {
 	// Setup: Create a temporary git repo with SSH URL
 	tempDir := t.TempDir()
 	setupTestGitRepo(t, tempDir, "git@gitlab.com:test/repo.git")
+
+	// Provide a dummy SSH key so auth setup succeeds without relying on the
+	// host machine's real ~/.ssh (absent on CI runners).
+	homeDir := t.TempDir()
+	writeDummySSHKey(t, homeDir)
+	t.Setenv("HOME", homeDir)
 
 	// Capture log output
 	var logBuffer bytes.Buffer
@@ -113,8 +151,7 @@ func TestSSHAuth_NoPathLeakage(t *testing.T) {
 	logOutput := logBuffer.String()
 
 	// Verify no full paths in logs (should be masked with ~/)
-	homeDir, err := os.UserHomeDir()
-	if err == nil && strings.Contains(logOutput, homeDir) {
+	if strings.Contains(logOutput, homeDir) {
 		// Check if it's properly masked
 		if !strings.Contains(logOutput, "~/.ssh/") {
 			t.Errorf("SSH key path not properly masked. Full path leaked:\n%s", logOutput)
