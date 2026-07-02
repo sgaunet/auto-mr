@@ -244,7 +244,6 @@ func setupTestGitRepo(t *testing.T, dir, remoteURL string) {
 	t.Helper()
 
 	// Initialize git repo
-	os.Chdir(dir)
 	runCmd(t, dir, "git", "init")
 	runCmd(t, dir, "git", "config", "user.email", "test@example.com")
 	runCmd(t, dir, "git", "config", "user.name", "Test User")
