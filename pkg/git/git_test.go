@@ -153,20 +153,12 @@ func TestFindGitRoot_WithRelativePath(t *testing.T) {
 		t.Fatalf("Failed to create subdirectory: %v", err)
 	}
 
-	// Change to subdirectory
-	originalWd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Failed to get current directory: %v", err)
-	}
-	defer func() {
-		if err := os.Chdir(originalWd); err != nil {
-			t.Logf("Failed to restore working directory: %v", err)
-		}
-	}()
-
-	if err := os.Chdir(subDir); err != nil {
-		t.Fatalf("Failed to change to subdirectory: %v", err)
-	}
+	// Change to subdirectory. t.Chdir automatically restores the original
+	// working directory during cleanup, even if the test fails, and panics
+	// if used alongside t.Parallel — this avoids leaking process-global cwd
+	// state into later tests in the same package (see e87cf36 for a prior,
+	// related fix of the same class of bug).
+	t.Chdir(subDir)
 
 	// Test with relative path "."
 	repo, err := git.OpenRepository(".")
@@ -337,11 +329,29 @@ func TestOpenRepository_Worktree(t *testing.T) {
 		}
 	}
 
-	// Create linked worktree
+	// Create linked worktree. Retried once: under heavy parallel test load
+	// (race detector + many concurrent package binaries), native git
+	// intermittently fails this specific invocation with "index file open
+	// failed: Not a directory" — a transient OS/filesystem timing issue in
+	// the external git process, not a bug in the code under test (see #102).
 	worktreeDir := filepath.Join(t.TempDir(), "worktree-feature")
 	cmd = exec.Command("git", "worktree", "add", worktreeDir, "feature-worktree")
 	cmd.Dir = mainDir
-	if out, err := cmd.CombinedOutput(); err != nil {
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		// Clean up any partial worktree registration before retrying, or the
+		// retry fails with "already used by worktree" instead of succeeding.
+		pruneCmd := exec.Command("git", "worktree", "prune")
+		pruneCmd.Dir = mainDir
+		_ = pruneCmd.Run()
+		_ = os.RemoveAll(worktreeDir)
+
+		time.Sleep(100 * time.Millisecond)
+		cmd = exec.Command("git", "worktree", "add", worktreeDir, "feature-worktree")
+		cmd.Dir = mainDir
+		out, err = cmd.CombinedOutput()
+	}
+	if err != nil {
 		t.Fatalf("Failed to create worktree: %v\n%s", err, out)
 	}
 
