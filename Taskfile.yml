@@ -1,27 +1,63 @@
 # https://taskfile.dev
 version: '3'
+includes:
+  dev: ./Taskfile_dev.yml
+
 vars:
   BINFILE: auto-mr
 
 tasks:
   default:
     desc: "List all tasks"
+    preconditions:
+      - sh: test -f .git/hooks/pre-commit
+        msg: "Pre-commit hook not found. Please run 'pre-commit install' to set it up."
     cmds:
       - task -a
 
-  build:
-    desc: "Build the binary"
+  check-before-commit:
+    desc: "Run checks before committing"
+    preconditions:
+      - test -f .git/hooks/pre-commit
+    deps:
+      - test
+      - snapshot
     cmds:
-      - go mod download
-      - CGO_ENABLED=0 go build .
+      - task: lint
 
   lint:
     desc: "Run linter"
     cmds:
+      - go generate ./...
       - golangci-lint run
 
+  test:
+    desc: "Run unit tests with race detection"
+    cmds:
+      - go test -count=2 -race ./...
+
+  coverage:
+    desc: "Generate coverage report"
+    cmds:
+      - go test -coverpkg=./... -coverprofile=profile.cov ./...
+      - |
+        if [ "$(uname)" = "Darwin" ]; then
+          sed -i '' '/cmd/d' profile.cov
+        else
+          sed -i '/cmd/d' profile.cov
+        fi
+      - go tool cover -func profile.cov | grep '^total:' | awk '{print $3}' | sed "s/%//"
+      - rm -f profile.cov
+
+  build:
+    desc: "Build binary"
+    cmds:
+      - CGO_ENABLED=0 go build -o {{.BINFILE}} .
+
+
+
   snapshot:
-    desc: "Create a snapshot release"
+    desc: "Create a snapshot"
     cmds:
       - GITLAB_TOKEN="" goreleaser --clean --snapshot
 
@@ -29,4 +65,8 @@ tasks:
     desc: "Create a release"
     cmds:
       - GITLAB_TOKEN="" goreleaser --clean
-  
+
+  godoc:
+    desc: "Go documentation of auto-mr"
+    cmds:
+      - go doc -http -c github.com/sgaunet/auto-mr
