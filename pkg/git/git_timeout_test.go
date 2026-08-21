@@ -20,8 +20,9 @@ func TestSwitchBranch_WithCancelledContext(t *testing.T) {
 	err := repo.SwitchBranch(ctx, "main")
 
 	// Expect either a GitTimeoutError or a context-related error
+	// Fatal, not Error: the assertions below dereference err.
 	if err == nil {
-		t.Error("Expected error with cancelled context, got nil")
+		t.Fatal("Expected error with cancelled context, got nil")
 	}
 
 	// Check if it's a GitTimeoutError
@@ -49,8 +50,9 @@ func TestPull_WithCancelledContext(t *testing.T) {
 	err := repo.Pull(ctx)
 
 	// Expect either a GitTimeoutError or a context-related error
+	// Fatal, not Error: the assertions below dereference err.
 	if err == nil {
-		t.Error("Expected error with cancelled context, got nil")
+		t.Fatal("Expected error with cancelled context, got nil")
 	}
 
 	// Check if it's a GitTimeoutError
@@ -78,8 +80,9 @@ func TestDeleteBranch_WithCancelledContext(t *testing.T) {
 	err := repo.DeleteBranch(ctx, "feature-branch")
 
 	// Expect either a GitTimeoutError or a context-related error
+	// Fatal, not Error: the assertions below dereference err.
 	if err == nil {
-		t.Error("Expected error with cancelled context, got nil")
+		t.Fatal("Expected error with cancelled context, got nil")
 	}
 
 	// Check if it's a GitTimeoutError
@@ -107,8 +110,9 @@ func TestFetchAndPrune_WithCancelledContext(t *testing.T) {
 	err := repo.FetchAndPrune(ctx)
 
 	// Expect either a GitTimeoutError or a context-related error
+	// Fatal, not Error: the assertions below dereference err.
 	if err == nil {
-		t.Error("Expected error with cancelled context, got nil")
+		t.Fatal("Expected error with cancelled context, got nil")
 	}
 
 	// Check if it's a GitTimeoutError
@@ -168,14 +172,18 @@ func TestSwitchBranch_WithTimeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// This should succeed if on main branch
-	err := repo.SwitchBranch(ctx, "main")
+	// The fixture is checked out on master and carries a main branch, so this is
+	// a real switch and must succeed. A timeout surfaces through the same Fatalf.
+	if err := repo.SwitchBranch(ctx, "main"); err != nil {
+		t.Fatalf("SwitchBranch failed with a 30s timeout: %v", err)
+	}
+
+	branch, err := repo.GetCurrentBranch()
 	if err != nil {
-		// It's okay if it fails for non-timeout reasons (e.g., already on main)
-		var timeoutErr *git.GitTimeoutError
-		if errors.As(err, &timeoutErr) {
-			t.Errorf("Operation timed out with 30s timeout: %v", err)
-		}
+		t.Fatalf("Failed to read current branch: %v", err)
+	}
+	if branch != "main" {
+		t.Errorf("Current branch = %q, want %q", branch, "main")
 	}
 }
 
