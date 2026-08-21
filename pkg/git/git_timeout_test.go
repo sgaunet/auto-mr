@@ -201,15 +201,18 @@ func TestCleanup_WithContext(t *testing.T) {
 	}
 }
 
-// setupTestRepo creates a test repository for testing
-// This is a helper function that should be defined in git_test.go or here
+// setupTestRepo opens a throwaway repository holding a "main" branch.
+//
+// These tests run real git commands, so this must never open the developer's own
+// checkout: TestSwitchBranch_WithTimeout would then check the working copy out to
+// another branch mid-suite. Because the pre-commit hook runs the suite, that moved
+// HEAD before the commit was written and silently landed commits on main.
 func setupTestRepo(t *testing.T) *git.Repository {
 	t.Helper()
 
-	// Open the current repository (assuming tests run from project root)
-	repo, err := git.OpenRepository("../..")
+	repo, err := git.OpenRepository(newRepoWithBranches(t, "main"))
 	if err != nil {
-		t.Skipf("Skipping test: not in a git repository: %v", err)
+		t.Fatalf("Failed to open temporary repository: %v", err)
 	}
 
 	return repo

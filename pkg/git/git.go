@@ -25,7 +25,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"net/url"
 	"strings"
@@ -522,9 +521,7 @@ func (r *Repository) SwitchBranch(ctx context.Context, branchName string) error 
 	ctx, cancel := context.WithTimeout(ctx, localGitTimeout)
 	defer cancel()
 
-	// #nosec G204 - branchName comes from git, not user input
-	cmd := exec.CommandContext(ctx, "git", "switch", branchName)
-	cmd.Dir = r.gitRoot // Set working directory to git root
+	cmd := r.gitCommand(ctx, "switch", branchName)
 	output, err := cmd.CombinedOutput()
 
 	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
@@ -557,8 +554,7 @@ func (r *Repository) Pull(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, networkGitTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "git", "pull")
-	cmd.Dir = r.gitRoot // Set working directory to git root
+	cmd := r.gitCommand(ctx, "pull")
 	output, err := cmd.CombinedOutput()
 
 	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
@@ -592,9 +588,7 @@ func (r *Repository) DeleteBranch(ctx context.Context, branchName string) error 
 	ctx, cancel := context.WithTimeout(ctx, localGitTimeout)
 	defer cancel()
 
-	// #nosec G204 - branchName comes from git, not user input
-	cmd := exec.CommandContext(ctx, "git", "branch", "-D", branchName)
-	cmd.Dir = r.gitRoot // Set working directory to git root
+	cmd := r.gitCommand(ctx, "branch", "-D", branchName)
 	output, err := cmd.CombinedOutput()
 
 	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
@@ -627,8 +621,7 @@ func (r *Repository) FetchAndPrune(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, networkGitTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "git", "fetch", "--prune")
-	cmd.Dir = r.gitRoot // Set working directory to git root
+	cmd := r.gitCommand(ctx, "fetch", "--prune")
 	output, err := cmd.CombinedOutput()
 
 	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
@@ -764,8 +757,7 @@ func (r *Repository) getMainBranchViaNativeGit() (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), networkGitTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "git", "ls-remote", "--symref", "origin", "HEAD")
-	cmd.Dir = r.gitRoot
+	cmd := r.gitCommand(ctx, "ls-remote", "--symref", "origin", "HEAD")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("git ls-remote failed: %w", err)
@@ -794,9 +786,7 @@ func (r *Repository) pushBranchViaNativeGit(branchName string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), networkGitTimeout)
 	defer cancel()
 
-	// #nosec G204 - branchName comes from git, not user input
-	cmd := exec.CommandContext(ctx, "git", "push", "-u", "origin", branchName)
-	cmd.Dir = r.gitRoot
+	cmd := r.gitCommand(ctx, "push", "-u", "origin", branchName)
 	output, err := cmd.CombinedOutput()
 
 	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {

@@ -33,6 +33,47 @@ func initTestRepo(t *testing.T, path string) {
 	}
 }
 
+// newRepoWithBranches creates a temporary repository holding a single commit on
+// its default branch plus the named extra branches, and returns its path.
+func newRepoWithBranches(t *testing.T, branches ...string) string {
+	t.Helper()
+
+	dir := t.TempDir()
+	repo, err := gogit.PlainInit(dir, false)
+	if err != nil {
+		t.Fatalf("Failed to init repository: %v", err)
+	}
+	if _, err := repo.CreateRemote(&config.RemoteConfig{
+		Name: "origin",
+		URLs: []string{"https://github.com/test/test.git"},
+	}); err != nil {
+		t.Fatalf("Failed to create remote origin: %v", err)
+	}
+
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("Failed to get worktree: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Test\n"), 0644); err != nil {
+		t.Fatalf("Failed to write README: %v", err)
+	}
+	if _, err := wt.Add("README.md"); err != nil {
+		t.Fatalf("Failed to stage README: %v", err)
+	}
+	if _, err := wt.Commit("initial commit", &gogit.CommitOptions{
+		Author: &object.Signature{Name: "Test", Email: "test@test.com", When: time.Now()},
+	}); err != nil {
+		t.Fatalf("Failed to create initial commit: %v", err)
+	}
+
+	for _, branch := range branches {
+		if out, err := gitCmd(dir, "branch", branch).CombinedOutput(); err != nil {
+			t.Fatalf("Failed to create branch %s: %v\n%s", branch, err, out)
+		}
+	}
+	return dir
+}
+
 // hermeticGitEnv returns the process environment stripped of every GIT_* variable,
 // with a fixed commit identity appended.
 //
