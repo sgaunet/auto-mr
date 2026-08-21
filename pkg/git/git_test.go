@@ -33,6 +33,70 @@ func initTestRepo(t *testing.T, path string) {
 	}
 }
 
+// hermeticGitEnv returns the process environment stripped of every GIT_* variable,
+// with a fixed commit identity appended.
+//
+// These tests shell out to native git, and the test binary itself may be started
+// from a git hook — the pre-commit hook runs `task test`. Git exports GIT_DIR=.git
+// and GIT_INDEX_FILE=.git/index into hook environments, both relative to the hooked
+// repository. Inheriting them points the child git at the wrong repository: inside a
+// linked worktree, where .git is a file rather than a directory, opening ".git/index"
+// fails with ENOTDIR and git dies with
+// "fatal: .git/index: index file open failed: Not a directory" (see #102).
+// Dropping the whole GIT_* namespace also keeps GIT_WORK_TREE, GIT_COMMON_DIR and
+// friends out, so these tests behave identically however they are invoked.
+func hermeticGitEnv() []string {
+	parent := os.Environ()
+	env := make([]string, 0, len(parent)+4)
+	for _, kv := range parent {
+		if !strings.HasPrefix(kv, "GIT_") {
+			env = append(env, kv)
+		}
+	}
+	return append(env,
+		"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@test.com",
+		"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@test.com",
+	)
+}
+
+// gitCmd builds a native git command rooted at dir with a hermetic environment.
+func gitCmd(dir string, args ...string) *exec.Cmd {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = hermeticGitEnv()
+	return cmd
+}
+
+// TestHermeticGitEnv_DropsInheritedGitVars guards the fix for #102: if these tests
+// ever go back to inheriting the ambient environment, TestOpenRepository_Worktree
+// starts failing whenever the suite runs from a git hook. Failing here instead
+// names the cause directly.
+func TestHermeticGitEnv_DropsInheritedGitVars(t *testing.T) {
+	t.Setenv("GIT_DIR", ".git")
+	t.Setenv("GIT_INDEX_FILE", ".git/index")
+	t.Setenv("GIT_WORK_TREE", "..")
+
+	var sawIdentity, sawUnrelated bool
+	for _, kv := range hermeticGitEnv() {
+		switch {
+		case strings.HasPrefix(kv, "GIT_DIR="),
+			strings.HasPrefix(kv, "GIT_INDEX_FILE="),
+			strings.HasPrefix(kv, "GIT_WORK_TREE="):
+			t.Errorf("inherited repository-pointing variable leaked into git env: %s", kv)
+		case kv == "GIT_AUTHOR_NAME=Test":
+			sawIdentity = true
+		case strings.HasPrefix(kv, "PATH="):
+			sawUnrelated = true
+		}
+	}
+	if !sawIdentity {
+		t.Error("expected the fixed commit identity to be present in the git env")
+	}
+	if !sawUnrelated {
+		t.Error("expected non-GIT_ variables such as PATH to be preserved")
+	}
+}
+
 // TestFindGitRoot_FromRoot tests finding git root when already at repository root.
 func TestFindGitRoot_FromRoot(t *testing.T) {
 	// Create temporary directory with proper git repository
@@ -290,8 +354,7 @@ func TestOpenRepository_Worktree(t *testing.T) {
 	}
 
 	// Create feature branch with a distinct commit using native git
-	cmd := exec.Command("git", "checkout", "-b", "feature-worktree")
-	cmd.Dir = mainDir
+	cmd := gitCmd(mainDir, "checkout", "-b", "feature-worktree")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("Failed to create feature branch: %v\n%s", err, out)
 	}
@@ -301,57 +364,30 @@ func TestOpenRepository_Worktree(t *testing.T) {
 		t.Fatalf("Failed to write feature file: %v", err)
 	}
 
-	cmd = exec.Command("git", "add", "feature.txt")
-	cmd.Dir = mainDir
+	cmd = gitCmd(mainDir, "add", "feature.txt")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("Failed to add feature file: %v\n%s", err, out)
 	}
 
-	cmd = exec.Command("git", "commit", "-m", "feat: add feature work")
-	cmd.Dir = mainDir
-	cmd.Env = append(os.Environ(),
-		"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@test.com",
-		"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@test.com",
-	)
+	cmd = gitCmd(mainDir, "commit", "-m", "feat: add feature work")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("Failed to commit feature: %v\n%s", err, out)
 	}
 
 	// Switch back to main so we can create a worktree for the feature branch
-	cmd = exec.Command("git", "checkout", "main")
-	cmd.Dir = mainDir
+	cmd = gitCmd(mainDir, "checkout", "main")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		// Try "master" if "main" doesn't exist
-		cmd = exec.Command("git", "checkout", "master")
-		cmd.Dir = mainDir
+		cmd = gitCmd(mainDir, "checkout", "master")
 		if out2, err2 := cmd.CombinedOutput(); err2 != nil {
 			t.Fatalf("Failed to checkout main/master: %v\n%s\n%s", err, out, out2)
 		}
 	}
 
-	// Create linked worktree. Retried once: under heavy parallel test load
-	// (race detector + many concurrent package binaries), native git
-	// intermittently fails this specific invocation with "index file open
-	// failed: Not a directory" — a transient OS/filesystem timing issue in
-	// the external git process, not a bug in the code under test (see #102).
+	// Create linked worktree
 	worktreeDir := filepath.Join(t.TempDir(), "worktree-feature")
-	cmd = exec.Command("git", "worktree", "add", worktreeDir, "feature-worktree")
-	cmd.Dir = mainDir
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		// Clean up any partial worktree registration before retrying, or the
-		// retry fails with "already used by worktree" instead of succeeding.
-		pruneCmd := exec.Command("git", "worktree", "prune")
-		pruneCmd.Dir = mainDir
-		_ = pruneCmd.Run()
-		_ = os.RemoveAll(worktreeDir)
-
-		time.Sleep(100 * time.Millisecond)
-		cmd = exec.Command("git", "worktree", "add", worktreeDir, "feature-worktree")
-		cmd.Dir = mainDir
-		out, err = cmd.CombinedOutput()
-	}
-	if err != nil {
+	cmd = gitCmd(mainDir, "worktree", "add", worktreeDir, "feature-worktree")
+	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("Failed to create worktree: %v\n%s", err, out)
 	}
 

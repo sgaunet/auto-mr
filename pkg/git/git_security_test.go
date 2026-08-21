@@ -300,6 +300,9 @@ func runCmd(t *testing.T, dir string, name string, args ...string) {
 	t.Helper()
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
+	// Same hermetic environment as gitCmd: never inherit GIT_* from a git hook
+	// or an outer git invocation (see #102).
+	cmd.Env = hermeticGitEnv()
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Logf("Command failed: %s %v\nOutput: %s", name, args, string(output))
