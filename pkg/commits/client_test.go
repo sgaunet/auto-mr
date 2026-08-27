@@ -156,10 +156,10 @@ func TestCommitList_Count(t *testing.T) {
 // T015 [P] [US1] Test CommitList.HasSingleCommit() and HasMultipleCommits() methods
 func TestCommitList_HasSingleCommit(t *testing.T) {
 	tests := []struct {
-		name             string
-		commitList       commits.CommitList
-		expectSingle     bool
-		expectMultiple   bool
+		name           string
+		commitList     commits.CommitList
+		expectSingle   bool
+		expectMultiple bool
 	}{
 		{
 			name: "single commit",

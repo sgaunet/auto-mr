@@ -20,7 +20,7 @@ func TestEdgeCaseEmptyResponses(t *testing.T) {
 			test: func(t *testing.T) {
 				mockAPI := mocks.NewGitLabAPIClient()
 				mockAPI.ListLabelsResponse = []*gitlab.Label{}
-				labels, err := mockAPI.ListLabels()
+				labels, err := mockAPI.ListLabels(t.Context())
 				if err != nil || len(labels) != 0 {
 					t.Errorf("Expected empty list, got %d labels", len(labels))
 				}
@@ -31,7 +31,7 @@ func TestEdgeCaseEmptyResponses(t *testing.T) {
 			test: func(t *testing.T) {
 				mockAPI := mocks.NewGitLabAPIClient()
 				mockAPI.GetMergeRequestsByBranchResponse = []*gitlablib.BasicMergeRequest{}
-				mrs, err := mockAPI.GetMergeRequestsByBranch("branch")
+				mrs, err := mockAPI.GetMergeRequestsByBranch(t.Context(), "branch")
 				if err != nil || len(mrs) != 0 {
 					t.Errorf("Expected empty list, got %d MRs", len(mrs))
 				}
@@ -59,7 +59,7 @@ func TestEdgeCaseSpecialCharacters(t *testing.T) {
 		t.Run("special char: "+str, func(t *testing.T) {
 			mockAPI := mocks.NewGitLabAPIClient()
 			mockAPI.CreateMergeRequestResponse = fixtures.ValidMergeRequest()
-			_, err := mockAPI.CreateMergeRequest(str, "main", "Test", "Desc", "", "", []string{}, false)
+			_, err := mockAPI.CreateMergeRequest(t.Context(), str, "main", "Test", "Desc", "", "", []string{}, false)
 			if err != nil {
 				t.Errorf("Failed to handle special characters: %v", err)
 			}
@@ -74,7 +74,7 @@ func TestEdgeCaseLongStrings(t *testing.T) {
 
 	mockAPI := mocks.NewGitLabAPIClient()
 	mockAPI.CreateMergeRequestResponse = fixtures.ValidMergeRequest()
-	_, err := mockAPI.CreateMergeRequest("feature", "main", longTitle, longDesc, "", "", []string{}, false)
+	_, err := mockAPI.CreateMergeRequest(t.Context(), "feature", "main", longTitle, longDesc, "", "", []string{}, false)
 	if err != nil {
 		t.Errorf("Failed to handle long strings: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestEdgeCaseURLVariations(t *testing.T) {
 			if test.shouldErr {
 				mockAPI.SetProjectFromURLError = gitlab.ErrInvalidURLFormat
 			}
-			err := mockAPI.SetProjectFromURL(test.url)
+			err := mockAPI.SetProjectFromURL(t.Context(), test.url)
 			if test.shouldErr && err == nil {
 				t.Error("Expected error for invalid URL")
 			}
@@ -120,7 +120,7 @@ func TestEdgeCasePipelineStates(t *testing.T) {
 		t.Run("pipeline state: "+state, func(t *testing.T) {
 			mockAPI := mocks.NewGitLabAPIClient()
 			mockAPI.WaitForPipelineStatus = state
-			status, err := mockAPI.WaitForPipeline(5000)
+			status, err := mockAPI.WaitForPipeline(t.Context(), 5000)
 			if err != nil {
 				t.Errorf("Error handling state %s: %v", state, err)
 			}
@@ -140,7 +140,7 @@ func TestEdgeCaseConcurrentOperations(t *testing.T) {
 		done := make(chan bool, 10)
 		for i := 0; i < 10; i++ {
 			go func() {
-				_, _ = mockAPI.ListLabels()
+				_, _ = mockAPI.ListLabels(t.Context())
 				done <- true
 			}()
 		}

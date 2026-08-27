@@ -1,6 +1,7 @@
 package github
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -30,13 +31,13 @@ const (
 //
 // Not safe for concurrent use.
 type Client struct {
-	client  *github.Client
-	owner   string
-	repo    string
+	client   *github.Client
+	owner    string
+	repo     string
 	prNumber int
-	prSHA   string
-	log     *bullets.Logger
-	display *displayRenderer // Display renderer for UI output
+	prSHA    string
+	log      *bullets.Logger
+	display  *displayRenderer // Display renderer for UI output
 }
 
 // Label represents a GitHub label.
@@ -59,6 +60,15 @@ type JobInfo struct {
 
 // checkTracker tracks workflow jobs/checks and their display handles with thread-safe access.
 type checkTracker struct {
+	// ctx scopes the spinners and refresh goroutines this tracker owns; cancel is
+	// invoked by Stop to tear them down deterministically.
+	//
+	//nolint:containedctx // The tracker is a scoped worker created per wait and torn
+	// down by Stop, and bullets.SpinnerCircle requires a context to stop its
+	// animation, so the lifetime is owned here rather than passed per call.
+	ctx    context.Context
+	cancel context.CancelFunc
+
 	mu       sync.RWMutex
 	checks   map[int64]*JobInfo
 	handles  map[int64]*bullets.BulletHandle

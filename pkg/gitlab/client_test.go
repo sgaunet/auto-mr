@@ -102,7 +102,7 @@ func TestSetProjectFromURL(t *testing.T) {
 				mockAPI.SetProjectFromURLError = gitlab.ErrInvalidURLFormat
 			}
 
-			err := mockAPI.SetProjectFromURL(tt.url)
+			err := mockAPI.SetProjectFromURL(t.Context(), tt.url)
 
 			if tt.wantError && err == nil {
 				t.Error("Expected error but got nil")
@@ -125,7 +125,7 @@ func TestListLabels(t *testing.T) {
 		mockAPI := mocks.NewGitLabAPIClient()
 		mockAPI.ListLabelsResponse = fixtures.ValidGitLabLabels()
 
-		labels, err := mockAPI.ListLabels()
+		labels, err := mockAPI.ListLabels(t.Context())
 		if err != nil {
 			t.Fatalf("Failed to list labels: %v", err)
 		}
@@ -144,7 +144,7 @@ func TestListLabels(t *testing.T) {
 		mockAPI := mocks.NewGitLabAPIClient()
 		mockAPI.ListLabelsError = gitlab.ErrTokenRequired
 
-		_, err := mockAPI.ListLabels()
+		_, err := mockAPI.ListLabels(t.Context())
 		if err == nil {
 			t.Error("Expected error but got nil")
 		}
@@ -154,7 +154,7 @@ func TestListLabels(t *testing.T) {
 		mockAPI := mocks.NewGitLabAPIClient()
 		mockAPI.ListLabelsResponse = []*gitlab.Label{}
 
-		labels, err := mockAPI.ListLabels()
+		labels, err := mockAPI.ListLabels(t.Context())
 		if err != nil {
 			t.Fatalf("Failed to list labels: %v", err)
 		}
@@ -171,7 +171,7 @@ func TestCreateMergeRequest(t *testing.T) {
 		mockAPI := mocks.NewGitLabAPIClient()
 		mockAPI.CreateMergeRequestResponse = fixtures.ValidMergeRequest()
 
-		mr, err := mockAPI.CreateMergeRequest(
+		mr, err := mockAPI.CreateMergeRequest(t.Context(),
 			"feature", "main", "Test MR", "Description",
 			"user1", "reviewer1", []string{"bug"}, false,
 		)
@@ -193,7 +193,7 @@ func TestCreateMergeRequest(t *testing.T) {
 		mockAPI := mocks.NewGitLabAPIClient()
 		mockAPI.CreateMergeRequestResponse = fixtures.ValidMergeRequest()
 
-		mr, err := mockAPI.CreateMergeRequest(
+		mr, err := mockAPI.CreateMergeRequest(t.Context(),
 			"feature", "main", "Test MR", "Description",
 			"", "", []string{}, false,
 		)
@@ -209,7 +209,7 @@ func TestCreateMergeRequest(t *testing.T) {
 		mockAPI := mocks.NewGitLabAPIClient()
 		mockAPI.CreateMergeRequestError = gitlab.ErrInvalidURLFormat
 
-		_, err := mockAPI.CreateMergeRequest(
+		_, err := mockAPI.CreateMergeRequest(t.Context(),
 			"feature", "main", "Test MR", "Description",
 			"", "", []string{}, false,
 		)
@@ -225,7 +225,7 @@ func TestGetMergeRequestByBranch(t *testing.T) {
 		mockAPI := mocks.NewGitLabAPIClient()
 		mockAPI.GetMergeRequestByBranchResponse = fixtures.ValidMergeRequest()
 
-		mr, err := mockAPI.GetMergeRequestByBranch("feature", "main")
+		mr, err := mockAPI.GetMergeRequestByBranch(t.Context(), "feature", "main")
 		if err != nil {
 			t.Fatalf("Failed to find MR: %v", err)
 		}
@@ -238,7 +238,7 @@ func TestGetMergeRequestByBranch(t *testing.T) {
 		mockAPI := mocks.NewGitLabAPIClient()
 		mockAPI.GetMergeRequestByBranchError = gitlab.ErrMRNotFound
 
-		_, err := mockAPI.GetMergeRequestByBranch("nonexistent", "main")
+		_, err := mockAPI.GetMergeRequestByBranch(t.Context(), "nonexistent", "main")
 		if err == nil {
 			t.Error("Expected error for non-existent MR")
 		}
@@ -251,7 +251,7 @@ func TestWaitForPipeline(t *testing.T) {
 		mockAPI := mocks.NewGitLabAPIClient()
 		mockAPI.WaitForPipelineStatus = "success"
 
-		status, err := mockAPI.WaitForPipeline(5 * time.Minute)
+		status, err := mockAPI.WaitForPipeline(t.Context(), 5*time.Minute)
 		if err != nil {
 			t.Fatalf("Unexpected error: %v", err)
 		}
@@ -264,7 +264,7 @@ func TestWaitForPipeline(t *testing.T) {
 		mockAPI := mocks.NewGitLabAPIClient()
 		mockAPI.WaitForPipelineStatus = "failed"
 
-		status, err := mockAPI.WaitForPipeline(5 * time.Minute)
+		status, err := mockAPI.WaitForPipeline(t.Context(), 5*time.Minute)
 		if err != nil {
 			t.Fatalf("Unexpected error: %v", err)
 		}
@@ -277,7 +277,7 @@ func TestWaitForPipeline(t *testing.T) {
 		mockAPI := mocks.NewGitLabAPIClient()
 		mockAPI.WaitForPipelineError = gitlab.ErrPipelineTimeout
 
-		_, err := mockAPI.WaitForPipeline(1 * time.Millisecond)
+		_, err := mockAPI.WaitForPipeline(t.Context(), 1*time.Millisecond)
 		if err == nil {
 			t.Error("Expected timeout error")
 		}
@@ -292,7 +292,7 @@ func TestApproveMergeRequest(t *testing.T) {
 	t.Run("approve MR successfully", func(t *testing.T) {
 		mockAPI := mocks.NewGitLabAPIClient()
 
-		err := mockAPI.ApproveMergeRequest(123)
+		err := mockAPI.ApproveMergeRequest(t.Context(), 123)
 		if err != nil {
 			t.Fatalf("Failed to approve MR: %v", err)
 		}
@@ -307,7 +307,7 @@ func TestApproveMergeRequest(t *testing.T) {
 		mockAPI := mocks.NewGitLabAPIClient()
 		mockAPI.ApproveMergeRequestError = gitlab.ErrTokenRequired
 
-		err := mockAPI.ApproveMergeRequest(123)
+		err := mockAPI.ApproveMergeRequest(t.Context(), 123)
 		if err == nil {
 			t.Error("Expected error but got nil")
 		}
@@ -328,7 +328,7 @@ func TestMergeMergeRequest(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			mockAPI := mocks.NewGitLabAPIClient()
 
-			err := mockAPI.MergeMergeRequest(123, tt.squash, "Test commit")
+			err := mockAPI.MergeMergeRequest(t.Context(), 123, tt.squash, "Test commit")
 			if err != nil {
 				t.Fatalf("Failed to merge MR: %v", err)
 			}
@@ -348,7 +348,7 @@ func TestMergeMergeRequest(t *testing.T) {
 		mockAPI := mocks.NewGitLabAPIClient()
 		mockAPI.MergeMergeRequestError = gitlab.ErrMRNotFound
 
-		err := mockAPI.MergeMergeRequest(123, false, "Test commit")
+		err := mockAPI.MergeMergeRequest(t.Context(), 123, false, "Test commit")
 		if err == nil {
 			t.Error("Expected error but got nil")
 		}
@@ -363,7 +363,7 @@ func TestGetMergeRequestsByBranch(t *testing.T) {
 			fixtures.BasicMergeRequest(123, "feature-branch", "main"),
 		}
 
-		mrs, err := mockAPI.GetMergeRequestsByBranch("feature-branch")
+		mrs, err := mockAPI.GetMergeRequestsByBranch(t.Context(), "feature-branch")
 		if err != nil {
 			t.Fatalf("Failed to list MRs: %v", err)
 		}
@@ -377,7 +377,7 @@ func TestGetMergeRequestsByBranch(t *testing.T) {
 		mockAPI := mocks.NewGitLabAPIClient()
 		mockAPI.GetMergeRequestsByBranchResponse = []*gitlablib.BasicMergeRequest{}
 
-		mrs, err := mockAPI.GetMergeRequestsByBranch("nonexistent-branch")
+		mrs, err := mockAPI.GetMergeRequestsByBranch(t.Context(), "nonexistent-branch")
 		if err != nil {
 			t.Fatalf("Failed to list MRs: %v", err)
 		}

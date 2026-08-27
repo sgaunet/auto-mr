@@ -1,6 +1,7 @@
 package mocks
 
 import (
+	"context"
 	"slices"
 	"sync"
 	"time"
@@ -38,7 +39,7 @@ func NewGitLabAPIClient() *GitLabAPIClient {
 }
 
 // SetProjectFromURL implements gitlab.APIClient.
-func (m *GitLabAPIClient) SetProjectFromURL(url string) error {
+func (m *GitLabAPIClient) SetProjectFromURL(_ context.Context, url string) error {
 	m.trackCall("SetProjectFromURL", map[string]any{
 		"url": url,
 	})
@@ -46,13 +47,14 @@ func (m *GitLabAPIClient) SetProjectFromURL(url string) error {
 }
 
 // ListLabels implements gitlab.APIClient.
-func (m *GitLabAPIClient) ListLabels() ([]*glpkg.Label, error) {
+func (m *GitLabAPIClient) ListLabels(_ context.Context) ([]*glpkg.Label, error) {
 	m.trackCall("ListLabels", map[string]any{})
 	return m.ListLabelsResponse, m.ListLabelsError
 }
 
 // CreateMergeRequest implements gitlab.APIClient.
 func (m *GitLabAPIClient) CreateMergeRequest(
+	_ context.Context,
 	sourceBranch, targetBranch, title, description, assignee, reviewer string,
 	labels []string, squash bool,
 ) (*gitlab.MergeRequest, error) {
@@ -70,7 +72,9 @@ func (m *GitLabAPIClient) CreateMergeRequest(
 }
 
 // GetMergeRequestByBranch implements gitlab.APIClient.
-func (m *GitLabAPIClient) GetMergeRequestByBranch(sourceBranch, targetBranch string) (*gitlab.MergeRequest, error) {
+func (m *GitLabAPIClient) GetMergeRequestByBranch(
+	_ context.Context, sourceBranch, targetBranch string,
+) (*gitlab.MergeRequest, error) {
 	m.trackCall("GetMergeRequestByBranch", map[string]any{
 		argSourceBranch: sourceBranch,
 		argTargetBranch: targetBranch,
@@ -79,7 +83,7 @@ func (m *GitLabAPIClient) GetMergeRequestByBranch(sourceBranch, targetBranch str
 }
 
 // WaitForPipeline implements gitlab.APIClient.
-func (m *GitLabAPIClient) WaitForPipeline(timeout time.Duration) (string, error) {
+func (m *GitLabAPIClient) WaitForPipeline(_ context.Context, timeout time.Duration) (string, error) {
 	m.trackCall("WaitForPipeline", map[string]any{
 		argTimeout: timeout,
 	})
@@ -87,7 +91,7 @@ func (m *GitLabAPIClient) WaitForPipeline(timeout time.Duration) (string, error)
 }
 
 // ApproveMergeRequest implements gitlab.APIClient.
-func (m *GitLabAPIClient) ApproveMergeRequest(mrIID int64) error {
+func (m *GitLabAPIClient) ApproveMergeRequest(_ context.Context, mrIID int64) error {
 	m.trackCall("ApproveMergeRequest", map[string]any{
 		"mrIID": mrIID,
 	})
@@ -95,7 +99,7 @@ func (m *GitLabAPIClient) ApproveMergeRequest(mrIID int64) error {
 }
 
 // MergeMergeRequest implements gitlab.APIClient.
-func (m *GitLabAPIClient) MergeMergeRequest(mrIID int64, squash bool, commitTitle string) error {
+func (m *GitLabAPIClient) MergeMergeRequest(_ context.Context, mrIID int64, squash bool, commitTitle string) error {
 	m.trackCall("MergeMergeRequest", map[string]any{
 		"mrIID":        mrIID,
 		argSquash:      squash,
@@ -105,7 +109,9 @@ func (m *GitLabAPIClient) MergeMergeRequest(mrIID int64, squash bool, commitTitl
 }
 
 // GetMergeRequestsByBranch implements gitlab.APIClient.
-func (m *GitLabAPIClient) GetMergeRequestsByBranch(sourceBranch string) ([]*gitlab.BasicMergeRequest, error) {
+func (m *GitLabAPIClient) GetMergeRequestsByBranch(
+	_ context.Context, sourceBranch string,
+) ([]*gitlab.BasicMergeRequest, error) {
 	m.trackCall("GetMergeRequestsByBranch", map[string]any{
 		argSourceBranch: sourceBranch,
 	})

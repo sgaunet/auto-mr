@@ -1,11 +1,13 @@
 package forgejo
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
 
 	"code.gitea.io/sdk/gitea"
+	"github.com/sgaunet/auto-mr/internal/polling"
 	"github.com/sgaunet/auto-mr/internal/urlutil"
 )
 
@@ -16,7 +18,12 @@ import (
 //
 // Returns [ErrInvalidURLFormat] if the URL cannot be parsed into owner/repo.
 // Returns a wrapped error if the repository does not exist or the API call fails.
-func (c *Client) SetRepositoryFromURL(url string) error {
+func (c *Client) SetRepositoryFromURL(ctx context.Context, url string) error {
+	// Bound the operation so a stalled response cannot hang a caller whose own
+	// context carries no deadline.
+	ctx, cancel := context.WithTimeout(ctx, polling.PerCallTimeout)
+	defer cancel()
+
 	url = strings.TrimSuffix(url, ".git")
 
 	ownerRepo := urlutil.ExtractPathComponents(url, minURLParts)
@@ -35,6 +42,7 @@ func (c *Client) SetRepositoryFromURL(url string) error {
 	c.log.Debug(fmt.Sprintf("Setting Forgejo repository: %s/%s", c.owner, c.repo))
 
 	// Validate repository exists.
+	c.client.SetContext(ctx)
 	_, _, err := c.client.GetRepo(c.owner, c.repo)
 	if err != nil {
 		return fmt.Errorf("failed to get repository information: %w", err)
@@ -48,9 +56,15 @@ func (c *Client) SetRepositoryFromURL(url string) error {
 // [Client.SetRepositoryFromURL] must be called before this method.
 //
 // Returns an empty slice if no labels are configured.
-func (c *Client) ListLabels() ([]Label, error) {
+func (c *Client) ListLabels(ctx context.Context) ([]Label, error) {
+	// Bound the operation so a stalled response cannot hang a caller whose own
+	// context carries no deadline.
+	ctx, cancel := context.WithTimeout(ctx, polling.PerCallTimeout)
+	defer cancel()
+
 	c.log.Debug("Listing Forgejo labels")
 
+	c.client.SetContext(ctx)
 	giteaLabels, _, err := c.client.ListRepoLabels(c.owner, c.repo, gitea.ListLabelsOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list labels: %w", err)
@@ -81,12 +95,18 @@ func (c *Client) ListLabels() ([]Label, error) {
 // Returns [ErrPRAlreadyExists] if a PR already exists for the same branches.
 // Stores the PR index and head SHA internally for use by [Client.WaitForPipeline].
 func (c *Client) CreatePullRequest(
+	ctx context.Context,
 	head, base, title, body, assignee, reviewer string,
 	labels []string,
 ) (*gitea.PullRequest, error) {
+	// Bound the operation so a stalled response cannot hang a caller whose own
+	// context carries no deadline.
+	ctx, cancel := context.WithTimeout(ctx, polling.OperationTimeout)
+	defer cancel()
+
 	c.log.Debug(fmt.Sprintf("Creating pull request from %s to %s", head, base))
 
-	labelIDs, err := c.resolveLabelIDs(labels)
+	labelIDs, err := c.resolveLabelIDs(ctx, labels)
 	if err != nil {
 		return nil, err
 	}
@@ -107,6 +127,7 @@ func (c *Client) CreatePullRequest(
 		opt.Reviewers = []string{reviewer}
 	}
 
+	c.client.SetContext(ctx)
 	pr, resp, err := c.client.CreatePullRequest(c.owner, c.repo, opt)
 	if err != nil {
 		if resp != nil && resp.StatusCode == http.StatusConflict {
@@ -131,7 +152,13 @@ func (c *Client) CreatePullRequest(
 // Only the first matching PR is returned. Stores the PR index and SHA internally.
 //
 // Returns [ErrPRNotFound] if no open PR matches the given branches.
-func (c *Client) GetPullRequestByBranch(head, base string) (*gitea.PullRequest, error) {
+func (c *Client) GetPullRequestByBranch(ctx context.Context, head, base string) (*gitea.PullRequest, error) {
+	// Bound the operation so a stalled response cannot hang a caller whose own
+	// context carries no deadline.
+	ctx, cancel := context.WithTimeout(ctx, polling.PerCallTimeout)
+	defer cancel()
+
+	c.client.SetContext(ctx)
 	prs, _, err := c.client.ListRepoPullRequests(c.owner, c.repo, gitea.ListPullRequestsOptions{
 		State: gitea.StateOpen,
 	})
@@ -161,7 +188,12 @@ func (c *Client) GetPullRequestByBranch(head, base string) (*gitea.PullRequest, 
 //   - index: the pull request index (number)
 //   - squash: if true, uses squash merge; otherwise standard merge
 //   - commitTitle: used as the merge commit message
-func (c *Client) MergePullRequest(index int64, squash bool, commitTitle string) error {
+func (c *Client) MergePullRequest(ctx context.Context, index int64, squash bool, commitTitle string) error {
+	// Bound the operation so a stalled response cannot hang a caller whose own
+	// context carries no deadline.
+	ctx, cancel := context.WithTimeout(ctx, polling.OperationTimeout)
+	defer cancel()
+
 	c.log.Debug(fmt.Sprintf("Merging pull request #%d (squash=%v)", index, squash))
 
 	style := gitea.MergeStyleMerge
@@ -169,7 +201,8 @@ func (c *Client) MergePullRequest(index int64, squash bool, commitTitle string) 
 		style = gitea.MergeStyleSquash
 	}
 
-	d:=true
+	d := true
+	c.client.SetContext(ctx)
 	_, _, err := c.client.MergePullRequest(c.owner, c.repo, index, gitea.MergePullRequestOption{
 		Style:                  style,
 		Title:                  commitTitle,
@@ -185,11 +218,12 @@ func (c *Client) MergePullRequest(index int64, squash bool, commitTitle string) 
 
 // resolveLabelIDs resolves label names to their integer IDs.
 // Names with no match in the repository's label list are silently skipped.
-func (c *Client) resolveLabelIDs(names []string) ([]int64, error) {
+func (c *Client) resolveLabelIDs(ctx context.Context, names []string) ([]int64, error) {
 	if len(names) == 0 {
 		return nil, nil
 	}
 
+	c.client.SetContext(ctx)
 	repoLabels, _, err := c.client.ListRepoLabels(c.owner, c.repo, gitea.ListLabelsOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list labels for resolution: %w", err)

@@ -17,7 +17,7 @@ func TestEdgeCaseEmptyResponses(t *testing.T) {
 		mockAPI := mocks.NewGitHubAPIClient()
 		mockAPI.ListLabelsResponse = []*ghpkg.Label{}
 
-		labels, err := mockAPI.ListLabels()
+		labels, err := mockAPI.ListLabels(t.Context())
 		if err != nil {
 			t.Fatalf("Unexpected error: %v", err)
 		}
@@ -33,7 +33,7 @@ func TestEdgeCaseEmptyResponses(t *testing.T) {
 		mockAPI := mocks.NewGitHubAPIClient()
 		mockAPI.GetPullRequestsByHeadResponse = []*github.PullRequest{}
 
-		prs, err := mockAPI.GetPullRequestsByHead("feature")
+		prs, err := mockAPI.GetPullRequestsByHead(t.Context(), "feature")
 		if err != nil {
 			t.Fatalf("Unexpected error: %v", err)
 		}
@@ -49,7 +49,7 @@ func TestEdgeCaseEmptyResponses(t *testing.T) {
 		mockAPI := mocks.NewGitHubAPIClient()
 		mockAPI.ListLabelsResponse = nil
 
-		labels, err := mockAPI.ListLabels()
+		labels, err := mockAPI.ListLabels(t.Context())
 		if err != nil {
 			t.Fatalf("Unexpected error: %v", err)
 		}
@@ -82,7 +82,7 @@ func TestEdgeCaseSpecialCharacters(t *testing.T) {
 			mockAPI.CreatePullRequestResponse = fixtures.ValidPullRequest()
 
 			// Should handle special characters without error
-			pr, err := mockAPI.CreatePullRequest(
+			pr, err := mockAPI.CreatePullRequest(t.Context(),
 				"feature", "main", tc.value, "Body", nil, nil, nil,
 			)
 			if err != nil {
@@ -110,7 +110,7 @@ func TestEdgeCaseLongStrings(t *testing.T) {
 		mockAPI := mocks.NewGitHubAPIClient()
 		mockAPI.CreatePullRequestResponse = fixtures.ValidPullRequest()
 
-		pr, err := mockAPI.CreatePullRequest(
+		pr, err := mockAPI.CreatePullRequest(t.Context(),
 			"feature", "main", longTitle, "Body", nil, nil, nil,
 		)
 		if err != nil {
@@ -127,7 +127,7 @@ func TestEdgeCaseLongStrings(t *testing.T) {
 		mockAPI := mocks.NewGitHubAPIClient()
 		mockAPI.CreatePullRequestResponse = fixtures.ValidPullRequest()
 
-		pr, err := mockAPI.CreatePullRequest(
+		pr, err := mockAPI.CreatePullRequest(t.Context(),
 			"feature", "main", "Title", longBody, nil, nil, nil,
 		)
 		if err != nil {
@@ -144,7 +144,7 @@ func TestEdgeCaseLongStrings(t *testing.T) {
 		mockAPI := mocks.NewGitHubAPIClient()
 		mockAPI.CreatePullRequestResponse = fixtures.ValidPullRequest()
 
-		pr, err := mockAPI.CreatePullRequest(
+		pr, err := mockAPI.CreatePullRequest(t.Context(),
 			longBranch, "main", "Title", "Body", nil, nil, nil,
 		)
 		if err != nil {
@@ -162,7 +162,7 @@ func TestEdgeCaseBoundaryValues(t *testing.T) {
 		mockAPI := mocks.NewGitHubAPIClient()
 		mockAPI.WaitForWorkflowsError = ghpkg.ErrWorkflowTimeout
 
-		_, err := mockAPI.WaitForWorkflows(0)
+		_, err := mockAPI.WaitForWorkflows(t.Context(), 0)
 		if err == nil {
 			t.Error("Expected error for zero timeout")
 		}
@@ -172,7 +172,7 @@ func TestEdgeCaseBoundaryValues(t *testing.T) {
 		mockAPI := mocks.NewGitHubAPIClient()
 		mockAPI.WaitForWorkflowsError = ghpkg.ErrWorkflowTimeout
 
-		_, err := mockAPI.WaitForWorkflows(-1 * time.Second)
+		_, err := mockAPI.WaitForWorkflows(t.Context(), -1*time.Second)
 		if err == nil {
 			t.Error("Expected error for negative timeout")
 		}
@@ -182,7 +182,7 @@ func TestEdgeCaseBoundaryValues(t *testing.T) {
 		mockAPI := mocks.NewGitHubAPIClient()
 		mockAPI.WaitForWorkflowsConclusion = "success"
 
-		conclusion, err := mockAPI.WaitForWorkflows(24 * time.Hour)
+		conclusion, err := mockAPI.WaitForWorkflows(t.Context(), 24*time.Hour)
 		if err != nil {
 			t.Fatalf("Unexpected error: %v", err)
 		}
@@ -195,7 +195,7 @@ func TestEdgeCaseBoundaryValues(t *testing.T) {
 		mockAPI := mocks.NewGitHubAPIClient()
 
 		// PR number 0 might be treated as invalid
-		err := mockAPI.MergePullRequest(0, "squash", "Test commit")
+		err := mockAPI.MergePullRequest(t.Context(), 0, "squash", "Test commit")
 		// Behavior depends on implementation - just verify it's handled
 		_ = err
 	})
@@ -204,7 +204,7 @@ func TestEdgeCaseBoundaryValues(t *testing.T) {
 		mockAPI := mocks.NewGitHubAPIClient()
 
 		// Negative PR number should be invalid
-		err := mockAPI.MergePullRequest(-1, "squash", "Test commit")
+		err := mockAPI.MergePullRequest(t.Context(), -1, "squash", "Test commit")
 		// Behavior depends on implementation - just verify it's handled
 		_ = err
 	})
@@ -222,7 +222,7 @@ func TestEdgeCaseMaximumLimits(t *testing.T) {
 		}
 		mockAPI.ListLabelsResponse = maxLabels
 
-		labels, err := mockAPI.ListLabels()
+		labels, err := mockAPI.ListLabels(t.Context())
 		if err != nil {
 			t.Fatalf("Unexpected error: %v", err)
 		}
@@ -241,7 +241,7 @@ func TestEdgeCaseMaximumLimits(t *testing.T) {
 			manyAssignees[i] = "user" + strings.Repeat("x", i)
 		}
 
-		pr, err := mockAPI.CreatePullRequest(
+		pr, err := mockAPI.CreatePullRequest(t.Context(),
 			"feature", "main", "Title", "Body",
 			manyAssignees, nil, nil,
 		)
@@ -263,7 +263,7 @@ func TestEdgeCaseMaximumLimits(t *testing.T) {
 			manyLabels[i] = "label-" + strings.Repeat("x", i)
 		}
 
-		pr, err := mockAPI.CreatePullRequest(
+		pr, err := mockAPI.CreatePullRequest(t.Context(),
 			"feature", "main", "Title", "Body",
 			nil, nil, manyLabels,
 		)
@@ -307,7 +307,7 @@ func TestEdgeCaseURLVariations(t *testing.T) {
 				mockAPI.SetRepositoryFromURLError = ghpkg.ErrInvalidURLFormat
 			}
 
-			err := mockAPI.SetRepositoryFromURL(tc.url)
+			err := mockAPI.SetRepositoryFromURL(t.Context(), tc.url)
 			if (err != nil) != tc.wantErr {
 				t.Errorf("URL %s: error = %v, wantErr %v", tc.url, err, tc.wantErr)
 			}
@@ -328,7 +328,7 @@ func TestEdgeCaseConcurrentOperations(t *testing.T) {
 		done := make(chan bool, 10)
 		for i := 0; i < 10; i++ {
 			go func() {
-				labels, err := mockAPI.ListLabels()
+				labels, err := mockAPI.ListLabels(t.Context())
 				if err != nil || len(labels) != 2 {
 					t.Errorf("Concurrent fetch failed: err=%v, len=%d", err, len(labels))
 				}
@@ -357,7 +357,7 @@ func TestEdgeCaseConcurrentOperations(t *testing.T) {
 		for i := 0; i < 5; i++ {
 			go func(num int) {
 				branch := strings.Repeat("feature-", num)
-				pr, err := mockAPI.CreatePullRequest(
+				pr, err := mockAPI.CreatePullRequest(t.Context(),
 					branch, "main", "Title", "Body", nil, nil, nil,
 				)
 				if err != nil || pr == nil {
@@ -381,7 +381,7 @@ func TestEdgeCaseNilPointers(t *testing.T) {
 		mockAPI.CreatePullRequestResponse = fixtures.ValidPullRequest()
 
 		// All slice parameters are nil
-		pr, err := mockAPI.CreatePullRequest(
+		pr, err := mockAPI.CreatePullRequest(t.Context(),
 			"feature", "main", "Title", "Body",
 			nil, nil, nil,
 		)
@@ -398,7 +398,7 @@ func TestEdgeCaseNilPointers(t *testing.T) {
 		mockAPI.CreatePullRequestResponse = fixtures.ValidPullRequest()
 
 		// All slice parameters are empty
-		pr, err := mockAPI.CreatePullRequest(
+		pr, err := mockAPI.CreatePullRequest(t.Context(),
 			"feature", "main", "Title", "Body",
 			[]string{}, []string{}, []string{},
 		)
@@ -429,7 +429,7 @@ func TestEdgeCaseWorkflowStates(t *testing.T) {
 			mockAPI := mocks.NewGitHubAPIClient()
 			mockAPI.WaitForWorkflowsConclusion = state
 
-			conclusion, err := mockAPI.WaitForWorkflows(5 * time.Minute)
+			conclusion, err := mockAPI.WaitForWorkflows(t.Context(), 5*time.Minute)
 			if err != nil {
 				t.Fatalf("Unexpected error for state %s: %v", state, err)
 			}
@@ -465,7 +465,7 @@ func TestEdgeCaseBranchNameFormats(t *testing.T) {
 			mockAPI := mocks.NewGitHubAPIClient()
 			mockAPI.CreatePullRequestResponse = fixtures.ValidPullRequest()
 
-			pr, err := mockAPI.CreatePullRequest(
+			pr, err := mockAPI.CreatePullRequest(t.Context(),
 				branch, "main", "Title", "Body", nil, nil, nil,
 			)
 			if err != nil {
@@ -501,7 +501,7 @@ func TestEdgeCaseRepositoryNotFound(t *testing.T) {
 		mockAPI := mocks.NewGitHubAPIClient()
 		mockAPI.SetRepositoryFromURLError = ghpkg.ErrInvalidURLFormat
 
-		err := mockAPI.SetRepositoryFromURL("https://github.com/private-owner/private-repo")
+		err := mockAPI.SetRepositoryFromURL(t.Context(), "https://github.com/private-owner/private-repo")
 		if err == nil {
 			t.Error("Expected error for private/inaccessible repository")
 		}
@@ -511,7 +511,7 @@ func TestEdgeCaseRepositoryNotFound(t *testing.T) {
 		mockAPI := mocks.NewGitHubAPIClient()
 		mockAPI.SetRepositoryFromURLError = ghpkg.ErrInvalidURLFormat
 
-		err := mockAPI.SetRepositoryFromURL("https://github.com/owner/deleted-repo")
+		err := mockAPI.SetRepositoryFromURL(t.Context(), "https://github.com/owner/deleted-repo")
 		if err == nil {
 			t.Error("Expected error for deleted repository")
 		}

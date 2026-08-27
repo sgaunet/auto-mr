@@ -14,30 +14,31 @@ import (
 type APIClient interface {
 	// SetRepositoryFromURL configures the repository from a git remote URL.
 	// Supports both HTTPS and SSH formats.
-	SetRepositoryFromURL(url string) error
+	SetRepositoryFromURL(ctx context.Context, url string) error
 
 	// ListLabels returns all labels available in the repository.
-	ListLabels() ([]Label, error)
+	ListLabels(ctx context.Context) ([]Label, error)
 
 	// CreatePullRequest creates a new pull request with the specified parameters.
 	// Returns the created pull request or an error if creation fails.
 	CreatePullRequest(
+		ctx context.Context,
 		head, base, title, body, assignee, reviewer string,
 		labels []string,
 	) (*gitea.PullRequest, error)
 
 	// GetPullRequestByBranch fetches an existing pull request by head and base branches.
 	// Returns ErrPRNotFound if no matching pull request exists.
-	GetPullRequestByBranch(head, base string) (*gitea.PullRequest, error)
+	GetPullRequestByBranch(ctx context.Context, head, base string) (*gitea.PullRequest, error)
 
 	// WaitForPipeline waits for all commit statuses to complete for the pull request.
 	// Returns the overall result ("success", "failure", "error") or an error on timeout.
-	WaitForPipeline(timeout time.Duration) (string, error)
+	WaitForPipeline(ctx context.Context, timeout time.Duration) (string, error)
 
 	// MergePullRequest merges a pull request using the specified strategy.
 	// index is the PR index (number). squash controls merge style.
 	// commitTitle is used as the merge commit message.
-	MergePullRequest(index int64, squash bool, commitTitle string) error
+	MergePullRequest(ctx context.Context, index int64, squash bool, commitTitle string) error
 }
 
 // DisplayRenderer defines the interface for UI rendering operations.

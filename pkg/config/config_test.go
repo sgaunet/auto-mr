@@ -459,7 +459,7 @@ func TestValidateGitLabAssignee(t *testing.T) {
 		{"contains special chars", "john#doe", "reviewer", config.ErrGitLabAssigneeInvalid},
 		{"too long 40 chars", "abcdefghijklmnopqrstuvwxyz12345678901234", "reviewer", config.ErrGitLabAssigneeInvalid},
 		{"too long 50 chars", "abcdefghijklmnopqrstuvwxyz123456789012345678901234", "reviewer", config.ErrGitLabAssigneeInvalid},
-		{"consecutive hyphens", "john--doe", "reviewer", nil}, // This is actually valid
+		{"consecutive hyphens", "john--doe", "reviewer", nil},     // This is actually valid
 		{"consecutive underscores", "john__doe", "reviewer", nil}, // This is actually valid
 	}
 
@@ -1423,11 +1423,11 @@ func TestLoadWithTimeout(t *testing.T) {
 // TestTimeoutWhitespaceTrimming tests that timeout values are trimmed.
 func TestTimeoutWhitespaceTrimming(t *testing.T) {
 	tests := []struct {
-		name            string
-		gitlabTimeout   string
-		githubTimeout   string
-		expectedGLTrim  string
-		expectedGHTrim  string
+		name           string
+		gitlabTimeout  string
+		githubTimeout  string
+		expectedGLTrim string
+		expectedGHTrim string
 	}{
 		{"leading spaces", "  30m", "  1h", "30m", "1h"},
 		{"trailing spaces", "30m  ", "1h  ", "30m", "1h"},

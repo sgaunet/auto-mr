@@ -15,7 +15,7 @@ func TestWorkflowMRCreationToMerge(t *testing.T) {
 
 		// Step 1: Create MR
 		mockAPI.CreateMergeRequestResponse = fixtures.ValidMergeRequest()
-		mr, err := mockAPI.CreateMergeRequest(
+		mr, err := mockAPI.CreateMergeRequest(t.Context(),
 			"feature", "main", "Test MR", "Description",
 			"user1", "reviewer1", []string{"bug"}, false,
 		)
@@ -25,19 +25,19 @@ func TestWorkflowMRCreationToMerge(t *testing.T) {
 
 		// Step 2: Wait for pipeline
 		mockAPI.WaitForPipelineStatus = "success"
-		status, _ := mockAPI.WaitForPipeline(5 * time.Minute)
+		status, _ := mockAPI.WaitForPipeline(t.Context(), 5*time.Minute)
 		if status != "success" {
 			t.Errorf("Expected success, got %s", status)
 		}
 
 		// Step 3: Approve MR
-		err = mockAPI.ApproveMergeRequest(123)
+		err = mockAPI.ApproveMergeRequest(t.Context(), 123)
 		if err != nil {
 			t.Fatalf("Failed to approve MR: %v", err)
 		}
 
 		// Step 4: Merge MR
-		err = mockAPI.MergeMergeRequest(123, false, "Test commit")
+		err = mockAPI.MergeMergeRequest(t.Context(), 123, false, "Test commit")
 		if err != nil {
 			t.Fatalf("Failed to merge MR: %v", err)
 		}
@@ -59,14 +59,14 @@ func TestWorkflowMRCreationToMerge(t *testing.T) {
 
 		// Create MR
 		mockAPI.CreateMergeRequestResponse = fixtures.ValidMergeRequest()
-		_, _ = mockAPI.CreateMergeRequest(
+		_, _ = mockAPI.CreateMergeRequest(t.Context(),
 			"feature", "main", "Test MR", "Description",
 			"", "", []string{}, false,
 		)
 
 		// Wait for pipeline - it fails
 		mockAPI.WaitForPipelineStatus = "failed"
-		status, _ := mockAPI.WaitForPipeline(5 * time.Minute)
+		status, _ := mockAPI.WaitForPipeline(t.Context(), 5*time.Minute)
 		if status != "failed" {
 			t.Errorf("Expected failure, got %s", status)
 		}
@@ -93,28 +93,28 @@ func TestWorkflowMRUpdateAndRetry(t *testing.T) {
 
 		// Create MR
 		mockAPI.CreateMergeRequestResponse = fixtures.ValidMergeRequest()
-		_, _ = mockAPI.CreateMergeRequest(
+		_, _ = mockAPI.CreateMergeRequest(t.Context(),
 			"feature", "main", "Test MR", "Description",
 			"", "", []string{}, false,
 		)
 
 		// First attempt - pipeline fails
 		mockAPI.WaitForPipelineStatus = "failed"
-		status1, _ := mockAPI.WaitForPipeline(5 * time.Minute)
+		status1, _ := mockAPI.WaitForPipeline(t.Context(), 5*time.Minute)
 		if status1 != "failed" {
 			t.Errorf("Expected first attempt to fail, got %s", status1)
 		}
 
 		// After fixing code, retry - pipeline succeeds
 		mockAPI.WaitForPipelineStatus = "success"
-		status2, _ := mockAPI.WaitForPipeline(5 * time.Minute)
+		status2, _ := mockAPI.WaitForPipeline(t.Context(), 5*time.Minute)
 		if status2 != "success" {
 			t.Errorf("Expected second attempt to succeed, got %s", status2)
 		}
 
 		// Now approve and merge
-		_ = mockAPI.ApproveMergeRequest(123)
-		_ = mockAPI.MergeMergeRequest(123, false, "Test commit")
+		_ = mockAPI.ApproveMergeRequest(t.Context(), 123)
+		_ = mockAPI.MergeMergeRequest(t.Context(), 123, false, "Test commit")
 
 		// Verify retry pattern
 		if mockAPI.GetCallCount("WaitForPipeline") != 2 {
@@ -131,18 +131,18 @@ func TestWorkflowFindExistingMR(t *testing.T) {
 
 		// Find existing MR
 		mockAPI.GetMergeRequestByBranchResponse = fixtures.ValidMergeRequest()
-		mr, _ := mockAPI.GetMergeRequestByBranch("feature", "main")
+		mr, _ := mockAPI.GetMergeRequestByBranch(t.Context(), "feature", "main")
 		if mr == nil {
 			t.Fatal("Expected to find existing MR")
 		}
 
 		// Wait for pipeline
 		mockAPI.WaitForPipelineStatus = "success"
-		_, _ = mockAPI.WaitForPipeline(5 * time.Minute)
+		_, _ = mockAPI.WaitForPipeline(t.Context(), 5*time.Minute)
 
 		// Approve and merge existing MR
-		_ = mockAPI.ApproveMergeRequest(123)
-		_ = mockAPI.MergeMergeRequest(123, false, "Test commit")
+		_ = mockAPI.ApproveMergeRequest(t.Context(), 123)
+		_ = mockAPI.MergeMergeRequest(t.Context(), 123, false, "Test commit")
 
 		// Verify workflow
 		if mockAPI.GetCallCount("GetMergeRequestByBranch") != 1 {
@@ -170,18 +170,18 @@ func TestWorkflowSquashMerge(t *testing.T) {
 
 			// Create MR
 			mockAPI.CreateMergeRequestResponse = fixtures.ValidMergeRequest()
-			_, _ = mockAPI.CreateMergeRequest(
+			_, _ = mockAPI.CreateMergeRequest(t.Context(),
 				"feature", "main", "Test MR", "Description",
 				"", "", []string{}, tt.squash,
 			)
 
 			// Wait for success
 			mockAPI.WaitForPipelineStatus = "success"
-			_, _ = mockAPI.WaitForPipeline(5 * time.Minute)
+			_, _ = mockAPI.WaitForPipeline(t.Context(), 5*time.Minute)
 
 			// Approve and merge with specific squash setting
-			_ = mockAPI.ApproveMergeRequest(123)
-			_ = mockAPI.MergeMergeRequest(123, tt.squash, "Test commit")
+			_ = mockAPI.ApproveMergeRequest(t.Context(), 123)
+			_ = mockAPI.MergeMergeRequest(t.Context(), 123, tt.squash, "Test commit")
 
 			// Verify squash setting
 			lastCall := mockAPI.GetLastCall("MergeMergeRequest")
@@ -202,14 +202,14 @@ func TestWorkflowWithLabels(t *testing.T) {
 
 		// List available labels
 		mockAPI.ListLabelsResponse = fixtures.ValidGitLabLabels()
-		labels, _ := mockAPI.ListLabels()
+		labels, _ := mockAPI.ListLabels(t.Context())
 		if len(labels) != 4 {
 			t.Errorf("Expected 4 labels, got %d", len(labels))
 		}
 
 		// Create MR with selected labels
 		mockAPI.CreateMergeRequestResponse = fixtures.ValidMergeRequest()
-		_, _ = mockAPI.CreateMergeRequest(
+		_, _ = mockAPI.CreateMergeRequest(t.Context(),
 			"bugfix", "main", "Fix critical bug", "Description",
 			"", "", []string{"bug", "urgent"}, false,
 		)
@@ -226,9 +226,9 @@ func TestWorkflowWithLabels(t *testing.T) {
 
 		// Complete workflow
 		mockAPI.WaitForPipelineStatus = "success"
-		_, _ = mockAPI.WaitForPipeline(5 * time.Minute)
-		_ = mockAPI.ApproveMergeRequest(123)
-		_ = mockAPI.MergeMergeRequest(123, false, "Test commit")
+		_, _ = mockAPI.WaitForPipeline(t.Context(), 5*time.Minute)
+		_ = mockAPI.ApproveMergeRequest(t.Context(), 123)
+		_ = mockAPI.MergeMergeRequest(t.Context(), 123, false, "Test commit")
 	})
 }
 
@@ -239,23 +239,23 @@ func TestWorkflowApprovalScenarios(t *testing.T) {
 
 		// Create MR
 		mockAPI.CreateMergeRequestResponse = fixtures.ValidMergeRequest()
-		_, _ = mockAPI.CreateMergeRequest(
+		_, _ = mockAPI.CreateMergeRequest(t.Context(),
 			"feature", "main", "Test MR", "Description",
 			"", "", []string{}, false,
 		)
 
 		// Wait for pipeline success
 		mockAPI.WaitForPipelineStatus = "success"
-		_, _ = mockAPI.WaitForPipeline(5 * time.Minute)
+		_, _ = mockAPI.WaitForPipeline(t.Context(), 5*time.Minute)
 
 		// Auto-approve (GitLab-specific feature)
-		err := mockAPI.ApproveMergeRequest(123)
+		err := mockAPI.ApproveMergeRequest(t.Context(), 123)
 		if err != nil {
 			t.Fatalf("Failed to auto-approve MR: %v", err)
 		}
 
 		// Merge after approval
-		err = mockAPI.MergeMergeRequest(123, false, "Test commit")
+		err = mockAPI.MergeMergeRequest(t.Context(), 123, false, "Test commit")
 		if err != nil {
 			t.Fatalf("Failed to merge MR: %v", err)
 		}

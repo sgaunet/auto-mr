@@ -14,36 +14,37 @@ import (
 type APIClient interface {
 	// SetRepositoryFromURL configures the repository from a git remote URL.
 	// Supports both HTTPS and SSH formats.
-	SetRepositoryFromURL(url string) error
+	SetRepositoryFromURL(ctx context.Context, url string) error
 
 	// ListLabels returns all labels available in the repository.
-	ListLabels() ([]*Label, error)
+	ListLabels(ctx context.Context) ([]*Label, error)
 
 	// CreatePullRequest creates a new pull request with the specified parameters.
 	// Returns the created pull request or an error if creation fails.
 	CreatePullRequest(
+		ctx context.Context,
 		head, base, title, body string,
 		assignees, reviewers, labels []string,
 	) (*github.PullRequest, error)
 
 	// GetPullRequestByBranch fetches an existing pull request by head and base branches.
 	// Returns errPRNotFound if no matching pull request exists.
-	GetPullRequestByBranch(head, base string) (*github.PullRequest, error)
+	GetPullRequestByBranch(ctx context.Context, head, base string) (*github.PullRequest, error)
 
 	// WaitForWorkflows waits for all workflow runs to complete for the pull request.
 	// Returns the overall conclusion (success, failure, etc.) or an error on timeout.
-	WaitForWorkflows(timeout time.Duration) (string, error)
+	WaitForWorkflows(ctx context.Context, timeout time.Duration) (string, error)
 
 	// MergePullRequest merges a pull request using the specified merge method.
 	// mergeMethod can be "merge", "squash", or "rebase".
 	// commitTitle is used as the merge commit message.
-	MergePullRequest(prNumber int, mergeMethod, commitTitle string) error
+	MergePullRequest(ctx context.Context, prNumber int, mergeMethod, commitTitle string) error
 
 	// GetPullRequestsByHead returns all open pull requests for the given head branch.
-	GetPullRequestsByHead(head string) ([]*github.PullRequest, error)
+	GetPullRequestsByHead(ctx context.Context, head string) ([]*github.PullRequest, error)
 
 	// DeleteBranch deletes a branch from the remote repository.
-	DeleteBranch(branch string) error
+	DeleteBranch(ctx context.Context, branch string) error
 }
 
 // StateTracker defines the interface for thread-safe job/check state management.

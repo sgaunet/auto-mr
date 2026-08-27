@@ -20,8 +20,8 @@ type CleanupReport struct {
 	DeleteError error
 
 	// Metadata
-	MainBranch  string
-	BranchName  string
+	MainBranch string
+	BranchName string
 }
 
 // Success returns true if all critical steps completed successfully.

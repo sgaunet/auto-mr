@@ -7,12 +7,15 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	autolabels "github.com/sgaunet/auto-mr/internal/labels"
 	"github.com/sgaunet/auto-mr/internal/logger"
+	"github.com/sgaunet/auto-mr/internal/polling"
 	"github.com/sgaunet/auto-mr/pkg/commits"
 	"github.com/sgaunet/auto-mr/pkg/config"
 	"github.com/sgaunet/auto-mr/pkg/git"
@@ -28,7 +31,7 @@ const (
 )
 
 var (
-	errOnMainBranch  = errors.New("you are on the main branch. Please checkout to a feature branch")
+	errOnMainBranch   = errors.New("you are on the main branch. Please checkout to a feature branch")
 	errPipelineFailed = errors.New("pipeline failed")
 	errTooManyLabels  = errors.New("too many labels specified")
 	errLabelNotFound  = errors.New("label not found in repository")
@@ -86,10 +89,24 @@ func init() {
 }
 
 func main() {
-	if err := rootCmd.Execute(); err != nil {
+	// run is separate so the signal handler's cleanup runs before os.Exit, which
+	// would otherwise skip deferred calls.
+	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// run executes the root command under a context cancelled by interrupt or SIGTERM.
+//
+// That context propagates to the platform clients and to git, so Ctrl-C aborts an
+// in-flight request immediately instead of taking effect only between polls.
+func run() error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	//nolint:wrapcheck // Cobra errors are surfaced verbatim to the user.
+	return rootCmd.ExecuteContext(ctx)
 }
 
 // getPipelineTimeout resolves pipeline timeout from three sources with priority:
@@ -248,6 +265,8 @@ func runAutoMR(cmd *cobra.Command, useManualLabels bool, manualLabelsValue strin
 	}
 	log.Debug("Configuration loaded successfully")
 
+	ctx := cmd.Context()
+
 	// The Forgejo instance URL scopes FORGEJO_TOKEN to that host; without it the
 	// token is never attached to any remote.
 	repo, err := git.OpenRepository(".", git.WithForgejoURL(cfg.Forgejo.URL))
@@ -264,7 +283,7 @@ func runAutoMR(cmd *cobra.Command, useManualLabels bool, manualLabelsValue strin
 
 	// Handle --list-labels flag (list and exit)
 	if listLabels {
-		return handleListLabels(detectedPlatform, cfg, repo)
+		return handleListLabels(ctx, detectedPlatform, cfg, repo)
 	}
 
 	mainBranch, currentBranch, err := validateBranches(repo)
@@ -272,7 +291,7 @@ func runAutoMR(cmd *cobra.Command, useManualLabels bool, manualLabelsValue strin
 		return err
 	}
 
-	if err := prepareRepository(context.Background(), repo, currentBranch); err != nil {
+	if err := prepareRepository(ctx, repo, currentBranch); err != nil {
 		return err
 	}
 
@@ -282,7 +301,7 @@ func runAutoMR(cmd *cobra.Command, useManualLabels bool, manualLabelsValue strin
 	}
 
 	return routeToPlatform(
-		cmd, detectedPlatform, cfg, currentBranch, mainBranch, title, body, repo,
+		ctx, cmd, detectedPlatform, cfg, currentBranch, mainBranch, title, body, repo,
 		useManualLabels, manualLabelsValue,
 	)
 }
@@ -396,6 +415,7 @@ func handleInteractiveSelection(
 }
 
 func routeToPlatform(
+	ctx context.Context,
 	cmd *cobra.Command,
 	detectedPlatform git.Platform,
 	cfg *config.Config,
@@ -404,7 +424,7 @@ func routeToPlatform(
 	useManualLabels bool,
 	manualLabelsValue string,
 ) error {
-	provider, err := platform.NewProvider(detectedPlatform, cfg, log)
+	provider, err := platform.NewProvider(ctx, detectedPlatform, cfg, log)
 	if err != nil {
 		return fmt.Errorf("failed to create platform client: %w", err)
 	}
@@ -414,15 +434,16 @@ func routeToPlatform(
 		return fmt.Errorf("failed to get remote URL: %w", err)
 	}
 
-	if err := provider.Initialize(remoteURL); err != nil {
+	if err := provider.Initialize(ctx, remoteURL); err != nil {
 		return fmt.Errorf("failed to initialize %s client: %w", provider.PlatformName(), err)
 	}
 
-	return handlePlatform(cmd, provider, currentBranch, mainBranch, title, body, repo,
+	return handlePlatform(ctx, cmd, provider, currentBranch, mainBranch, title, body, repo,
 		useManualLabels, manualLabelsValue)
 }
 
 func handlePlatform(
+	ctx context.Context,
 	cmd *cobra.Command,
 	provider platform.Provider,
 	currentBranch, mainBranch, title, body string,
@@ -430,26 +451,27 @@ func handlePlatform(
 	useManualLabels bool,
 	manualLabelsValue string,
 ) error {
-	selectedLabels, err := selectLabels(provider, useManualLabels, manualLabelsValue, title)
+	selectedLabels, err := selectLabels(ctx, provider, useManualLabels, manualLabelsValue, title)
 	if err != nil {
 		return err
 	}
 
-	mr, err := createMR(provider, currentBranch, mainBranch, title, body, selectedLabels, !noSquash)
+	mr, err := createMR(ctx, provider, currentBranch, mainBranch, title, body, selectedLabels, !noSquash)
 	if err != nil {
 		return err
 	}
 
-	if err := waitAndMerge(cmd, provider, mr, !noSquash, title); err != nil {
+	if err := waitAndMerge(ctx, cmd, provider, mr, !noSquash, title); err != nil {
 		return err
 	}
 
-	ctx := context.Background()
 	return cleanup(ctx, repo, mainBranch, currentBranch)
 }
 
-func handleListLabels(detectedPlatform git.Platform, cfg *config.Config, repo *git.Repository) error {
-	provider, err := platform.NewProvider(detectedPlatform, cfg, log)
+func handleListLabels(
+	ctx context.Context, detectedPlatform git.Platform, cfg *config.Config, repo *git.Repository,
+) error {
+	provider, err := platform.NewProvider(ctx, detectedPlatform, cfg, log)
 	if err != nil {
 		return fmt.Errorf("failed to create platform client: %w", err)
 	}
@@ -459,11 +481,11 @@ func handleListLabels(detectedPlatform git.Platform, cfg *config.Config, repo *g
 		return fmt.Errorf("failed to get remote URL: %w", err)
 	}
 
-	if err := provider.Initialize(remoteURL); err != nil {
+	if err := provider.Initialize(ctx, remoteURL); err != nil {
 		return fmt.Errorf("failed to initialize %s client: %w", provider.PlatformName(), err)
 	}
 
-	availableLabels, err := provider.ListLabels()
+	availableLabels, err := provider.ListLabels(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to list labels: %w", err)
 	}
@@ -477,9 +499,10 @@ func handleListLabels(detectedPlatform git.Platform, cfg *config.Config, repo *g
 }
 
 func selectLabels(
+	ctx context.Context,
 	provider platform.Provider, useManualSelection bool, manualLabels string, title string,
 ) ([]string, error) {
-	availableLabels, err := provider.ListLabels()
+	availableLabels, err := provider.ListLabels(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list labels: %w", err)
 	}
@@ -507,6 +530,7 @@ func selectLabels(
 }
 
 func createMR(
+	ctx context.Context,
 	provider platform.Provider,
 	currentBranch, mainBranch, title, body string,
 	selectedLabels []string,
@@ -515,7 +539,7 @@ func createMR(
 	log.IncreasePadding()
 	log.Infof("Creating %s merge/pull request...", provider.PlatformName())
 
-	mr, err := provider.Create(platform.CreateParams{
+	mr, err := provider.Create(ctx, platform.CreateParams{
 		SourceBranch: currentBranch,
 		TargetBranch: mainBranch,
 		Title:        title,
@@ -526,7 +550,7 @@ func createMR(
 	if err != nil {
 		if errors.Is(err, platform.ErrAlreadyExists) {
 			log.Warnf("Merge/pull request already exists for branch: %s", currentBranch)
-			existingMR, fetchErr := provider.GetByBranch(currentBranch, mainBranch)
+			existingMR, fetchErr := provider.GetByBranch(ctx, currentBranch, mainBranch)
 			if fetchErr != nil {
 				return nil, fmt.Errorf("failed to fetch existing merge/pull request: %w", fetchErr)
 			}
@@ -544,20 +568,24 @@ func createMR(
 }
 
 func waitAndMerge(
+	ctx context.Context,
 	cmd *cobra.Command,
 	provider platform.Provider,
 	mr *platform.MergeRequest,
 	squash bool,
 	commitTitle string,
 ) error {
-	time.Sleep(pipelineStartupDelay)
+	if !polling.Sleep(ctx, pipelineStartupDelay) {
+		//nolint:wrapcheck // Context error is already descriptive.
+		return ctx.Err()
+	}
 
 	timeout, err := getPipelineTimeout(cmd, provider.PipelineTimeout())
 	if err != nil {
 		return err
 	}
 
-	status, err := provider.WaitForPipeline(timeout)
+	status, err := provider.WaitForPipeline(ctx, timeout)
 	if err != nil {
 		return fmt.Errorf("failed to wait for pipeline: %w", err)
 	}
@@ -570,11 +598,11 @@ func waitAndMerge(
 	log.IncreasePadding()
 
 	log.Info("Approving merge/pull request...")
-	if err := provider.Approve(mr.ID); err != nil {
+	if err := provider.Approve(ctx, mr.ID); err != nil {
 		log.Warnf("Failed to approve merge/pull request: %v", err)
 	}
 
-	if err := provider.Merge(platform.MergeParams{
+	if err := provider.Merge(ctx, platform.MergeParams{
 		MRID:         mr.ID,
 		Squash:       squash,
 		CommitTitle:  commitTitle,

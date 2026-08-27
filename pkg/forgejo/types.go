@@ -1,6 +1,7 @@
 package forgejo
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -10,10 +11,10 @@ import (
 
 // Constants for Forgejo API operations.
 const (
-	minURLParts         = 2
-	statusPollInterval  = 5 * time.Second
+	minURLParts           = 2
+	statusPollInterval    = 5 * time.Second
 	spinnerUpdateInterval = 1 * time.Second
-	pipelineGraceCycles = 2 // grace poll cycles before treating "no statuses" as success
+	pipelineGraceCycles   = 2 // grace poll cycles before treating "no statuses" as success
 )
 
 // State string constants for CI status display.
@@ -31,14 +32,14 @@ const (
 //
 // Not safe for concurrent use.
 type Client struct {
-	client      *gitea.Client
-	owner       string
-	repo        string
-	prIndex     int64
-	prSHA       string
-	log         *bullets.Logger
+	client       *gitea.Client
+	owner        string
+	repo         string
+	prIndex      int64
+	prSHA        string
+	log          *bullets.Logger
 	updatableLog *bullets.UpdatableLogger
-	display     *displayRenderer
+	display      *displayRenderer
 }
 
 // Label represents a Forgejo repository label.
@@ -57,6 +58,15 @@ type statusEntry struct {
 // statusTracker tracks commit-status entries and their display handles.
 // Keyed by context string (e.g. "ci/test", "ci/build").
 type statusTracker struct {
+	// ctx scopes the spinners and refresh goroutines this tracker owns; cancel is
+	// invoked by Stop to tear them down deterministically.
+	//
+	//nolint:containedctx // The tracker is a scoped worker created per wait and torn
+	// down by Stop, and bullets.SpinnerCircle requires a context to stop its
+	// animation, so the lifetime is owned here rather than passed per call.
+	ctx    context.Context
+	cancel context.CancelFunc
+
 	mu       sync.RWMutex
 	entries  map[string]*statusEntry
 	handles  map[string]*bullets.BulletHandle

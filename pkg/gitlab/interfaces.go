@@ -14,36 +14,37 @@ import (
 type APIClient interface {
 	// SetProjectFromURL configures the project from a git remote URL.
 	// Supports both HTTPS and SSH formats.
-	SetProjectFromURL(url string) error
+	SetProjectFromURL(ctx context.Context, url string) error
 
 	// ListLabels returns all labels available in the project.
-	ListLabels() ([]*Label, error)
+	ListLabels(ctx context.Context) ([]*Label, error)
 
 	// CreateMergeRequest creates a new merge request with the specified parameters.
 	// Returns the created merge request or an error if creation fails.
 	CreateMergeRequest(
+		ctx context.Context,
 		sourceBranch, targetBranch, title, description, assignee, reviewer string,
 		labels []string, squash bool,
 	) (*gitlab.MergeRequest, error)
 
 	// GetMergeRequestByBranch fetches an existing merge request by source and target branches.
 	// Returns errMRNotFound if no matching merge request exists.
-	GetMergeRequestByBranch(sourceBranch, targetBranch string) (*gitlab.MergeRequest, error)
+	GetMergeRequestByBranch(ctx context.Context, sourceBranch, targetBranch string) (*gitlab.MergeRequest, error)
 
 	// WaitForPipeline waits for all pipelines to complete for the merge request.
 	// Returns the overall status (success, failed, etc.) or an error on timeout.
-	WaitForPipeline(timeout time.Duration) (string, error)
+	WaitForPipeline(ctx context.Context, timeout time.Duration) (string, error)
 
 	// ApproveMergeRequest approves a merge request.
 	// Returns an error if the approval fails.
-	ApproveMergeRequest(mrIID int64) error
+	ApproveMergeRequest(ctx context.Context, mrIID int64) error
 
 	// MergeMergeRequest merges a merge request with optional squash.
 	// Returns an error if the merge fails.
-	MergeMergeRequest(mrIID int64, squash bool, commitTitle string) error
+	MergeMergeRequest(ctx context.Context, mrIID int64, squash bool, commitTitle string) error
 
 	// GetMergeRequestsByBranch returns all open merge requests for the given source branch.
-	GetMergeRequestsByBranch(sourceBranch string) ([]*gitlab.BasicMergeRequest, error)
+	GetMergeRequestsByBranch(ctx context.Context, sourceBranch string) ([]*gitlab.BasicMergeRequest, error)
 }
 
 // StateTracker defines the interface for thread-safe job state management.

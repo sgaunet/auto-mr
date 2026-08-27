@@ -1,6 +1,8 @@
 package gitlab
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -9,6 +11,7 @@ import (
 	"time"
 
 	"github.com/sgaunet/auto-mr/internal/logger"
+	"github.com/sgaunet/auto-mr/internal/polling"
 	"github.com/sgaunet/auto-mr/internal/timeutil"
 	"github.com/sgaunet/auto-mr/internal/urlutil"
 	"github.com/sgaunet/bullets"
@@ -58,7 +61,12 @@ func (c *Client) SetLogger(logger *bullets.Logger) {
 //
 // Returns [ErrInvalidURLFormat] if the URL cannot be parsed.
 // Returns a wrapped error if the project does not exist or the API call fails.
-func (c *Client) SetProjectFromURL(url string) error {
+func (c *Client) SetProjectFromURL(ctx context.Context, url string) error {
+	// Bound the operation so a stalled response cannot hang a caller whose own
+	// context carries no deadline.
+	ctx, cancel := context.WithTimeout(ctx, polling.PerCallTimeout)
+	defer cancel()
+
 	// Extract project path from URL
 	// Supports both HTTPS and SSH formats:
 	// - https://gitlab.com/user/project.git
@@ -73,7 +81,7 @@ func (c *Client) SetProjectFromURL(url string) error {
 	c.log.Debug("Setting GitLab project: " + projectPath)
 
 	// Get project info to validate and get project ID
-	project, _, err := c.client.Projects.GetProject(projectPath, nil)
+	project, _, err := c.client.Projects.GetProject(projectPath, nil, gitlab.WithContext(ctx))
 	if err != nil {
 		return fmt.Errorf("failed to get project information: %w", err)
 	}
@@ -87,12 +95,17 @@ func (c *Client) SetProjectFromURL(url string) error {
 // [SetProjectFromURL] must be called before this method.
 //
 // Returns an empty slice if no labels are configured.
-func (c *Client) ListLabels() ([]*Label, error) {
+func (c *Client) ListLabels(ctx context.Context) ([]*Label, error) {
+	// Bound the operation so a stalled response cannot hang a caller whose own
+	// context carries no deadline.
+	ctx, cancel := context.WithTimeout(ctx, polling.PerCallTimeout)
+	defer cancel()
+
 	c.log.Debug("Listing GitLab labels")
 
 	labels, _, err := c.client.Labels.ListLabels(c.projectID, &gitlab.ListLabelsOptions{
 		IncludeAncestorGroups: new(true),
-	})
+	}, gitlab.WithContext(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("failed to list labels: %w", err)
 	}
@@ -123,22 +136,28 @@ func (c *Client) ListLabels() ([]*Label, error) {
 // Returns [ErrAssigneeNotFound] or [ErrReviewerNotFound] if users cannot be found.
 // Stores the MR IID and SHA internally for use by [Client.WaitForPipeline].
 func (c *Client) CreateMergeRequest(
+	ctx context.Context,
 	sourceBranch, targetBranch, title, description, assignee, reviewer string,
 	labels []string, squash bool,
 ) (*gitlab.MergeRequest, error) {
+	// Bound the operation so a stalled response cannot hang a caller whose own
+	// context carries no deadline.
+	ctx, cancel := context.WithTimeout(ctx, polling.OperationTimeout)
+	defer cancel()
+
 	c.log.Debug(fmt.Sprintf("Creating merge request from %s to %s", sourceBranch, targetBranch))
 
 	// Get user IDs for assignee and reviewer
 	assigneeUser, _, err := c.client.Users.ListUsers(&gitlab.ListUsersOptions{
 		Username: &assignee,
-	})
+	}, gitlab.WithContext(ctx))
 	if err != nil || len(assigneeUser) == 0 {
 		return nil, fmt.Errorf("%w: %s", errAssigneeNotFound, assignee)
 	}
 
 	reviewerUser, _, err := c.client.Users.ListUsers(&gitlab.ListUsersOptions{
 		Username: &reviewer,
-	})
+	}, gitlab.WithContext(ctx))
 	if err != nil || len(reviewerUser) == 0 {
 		return nil, fmt.Errorf("%w: %s", errReviewerNotFound, reviewer)
 	}
@@ -159,7 +178,7 @@ func (c *Client) CreateMergeRequest(
 		RemoveSourceBranch: new(true),
 	}
 
-	mr, _, err := c.client.MergeRequests.CreateMergeRequest(c.projectID, createOptions)
+	mr, _, err := c.client.MergeRequests.CreateMergeRequest(c.projectID, createOptions, gitlab.WithContext(ctx))
 	if err != nil {
 		// Check if error indicates MR already exists
 		errMsg := strings.ToLower(err.Error())
@@ -181,12 +200,19 @@ func (c *Client) CreateMergeRequest(
 // Only the first matching MR is returned. Stores the MR IID and SHA internally.
 //
 // Returns [ErrMRNotFound] if no open MR matches the given branches.
-func (c *Client) GetMergeRequestByBranch(sourceBranch, targetBranch string) (*gitlab.MergeRequest, error) {
+func (c *Client) GetMergeRequestByBranch(
+	ctx context.Context, sourceBranch, targetBranch string,
+) (*gitlab.MergeRequest, error) {
+	// Bound the operation so a stalled response cannot hang a caller whose own
+	// context carries no deadline.
+	ctx, cancel := context.WithTimeout(ctx, polling.PerCallTimeout)
+	defer cancel()
+
 	mrs, _, err := c.client.MergeRequests.ListProjectMergeRequests(c.projectID, &gitlab.ListProjectMergeRequestsOptions{
 		State:        new("opened"),
 		SourceBranch: &sourceBranch,
 		TargetBranch: &targetBranch,
-	})
+	}, gitlab.WithContext(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("failed to list merge requests: %w", err)
 	}
@@ -196,7 +222,7 @@ func (c *Client) GetMergeRequestByBranch(sourceBranch, targetBranch string) (*gi
 	}
 
 	// Get full MR details
-	mr, _, err := c.client.MergeRequests.GetMergeRequest(c.projectID, mrs[0].IID, nil)
+	mr, _, err := c.client.MergeRequests.GetMergeRequest(c.projectID, mrs[0].IID, nil, gitlab.WithContext(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("failed to get merge request details: %w", err)
 	}
@@ -217,12 +243,20 @@ func (c *Client) GetMergeRequestByBranch(sourceBranch, targetBranch string) (*gi
 // Returns [ErrPipelineTimeout] if the timeout is exceeded.
 //
 // A merge request must have been created or fetched before calling this method.
-func (c *Client) WaitForPipeline(timeout time.Duration) (string, error) {
+func (c *Client) WaitForPipeline(ctx context.Context, timeout time.Duration) (string, error) {
 	c.log.Debug(fmt.Sprintf("Waiting for pipeline, timeout: %v", timeout))
 	start := time.Now()
 
+	// The overall budget bounds the whole wait; each individual request additionally
+	// gets a short deadline of its own, so one stalled response cannot consume the
+	// entire budget. Only overallCtx can distinguish "this request stalled, poll
+	// again" from "the budget is spent": a per-request context is derived from it and
+	// so reports an error in both cases.
+	overallCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
 	// First check if any pipelines are expected for this commit
-	if !c.hasPipelineRuns() {
+	if !c.hasPipelineRuns(overallCtx) {
 		c.log.Info("No pipeline runs configured for this merge request, proceeding without checks")
 		return statusSuccess, nil
 	}
@@ -233,56 +267,92 @@ func (c *Client) WaitForPipeline(timeout time.Duration) (string, error) {
 	defer c.updatableLog.DecreasePadding()
 
 	// Initialize job tracker for managing individual job handles
-	tracker := newJobTracker()
+	tracker := newJobTracker(overallCtx)
+	defer tracker.Stop()
 
-	for time.Since(start) < timeout {
-		pipelines, _, err := c.client.MergeRequests.ListMergeRequestPipelines(c.projectID, c.mrIID, nil)
+	for overallCtx.Err() == nil {
+		status, done, err := c.pollPipelineOnce(overallCtx, tracker)
 		if err != nil {
-			c.updatableLog.Error(fmt.Sprintf("Failed to list MR pipelines: %v", err))
-			return "", fmt.Errorf("failed to list MR pipelines: %w", err)
+			if overallCtx.Err() != nil {
+				break // Budget spent or cancelled; reported after the loop.
+			}
+			return "", err
 		}
-
-		if len(pipelines) == 0 {
-			// Wait silently for pipelines to appear (they'll show as individual spinners when they start)
-			time.Sleep(pipelinePollInterval)
-			continue
+		if done {
+			c.reportPipelineOutcome(status, time.Since(start))
+			return status, nil
 		}
-
-		// Process all pipelines with individual job tracking
-		allCompleted, overallStatus := c.processPipelinesWithJobTracking(pipelines, tracker)
-
-		if !allCompleted {
-			time.Sleep(pipelinePollInterval)
-			continue
+		if !polling.Sleep(overallCtx, pipelinePollInterval) {
+			break
 		}
-
-		// All pipelines completed - display final summary
-		totalDuration := time.Since(start)
-		if overallStatus == statusSuccess {
-			c.updatableLog.Success("Pipeline completed successfully - total time: " +
-				timeutil.FormatDuration(totalDuration))
-		} else {
-			msg := "Pipeline failed - total time: " +
-				timeutil.FormatDuration(totalDuration)
-			handle := c.updatableLog.InfoHandle(msg)
-			handle.Error(msg)
-		}
-		return overallStatus, nil
 	}
 
 	totalDuration := time.Since(start)
+	if errors.Is(overallCtx.Err(), context.Canceled) {
+		c.updatableLog.Error("Cancelled after " + timeutil.FormatDuration(totalDuration))
+		return "", errPipelineCanceled
+	}
 	c.updatableLog.Error("Timeout after " + timeutil.FormatDuration(totalDuration))
 	return "", errPipelineTimeout
+}
+
+// pollPipelineOnce performs a single polling round, bounded by its own short
+// deadline so a stalled request cannot consume the overall budget.
+//
+// It reports the pipeline status and whether the pipelines have all reached a
+// terminal state. An error accompanied by a finished overallCtx means the wait
+// itself ended rather than the request failing, and the caller distinguishes those.
+func (c *Client) pollPipelineOnce(
+	overallCtx context.Context, tracker *jobTracker,
+) (string, bool, error) {
+	pollCtx, cancelPoll := context.WithTimeout(overallCtx, polling.PerCallTimeout)
+	defer cancelPoll()
+
+	pipelines, _, err := c.client.MergeRequests.ListMergeRequestPipelines(
+		c.projectID, c.mrIID, nil, gitlab.WithContext(pollCtx))
+	if err != nil {
+		if overallCtx.Err() == nil {
+			c.updatableLog.Error(fmt.Sprintf("Failed to list MR pipelines: %v", err))
+		}
+		return "", false, fmt.Errorf("failed to list MR pipelines: %w", err)
+	}
+
+	// Wait silently for pipelines to appear; they show as individual spinners once
+	// they start.
+	if len(pipelines) == 0 {
+		return "", false, nil
+	}
+
+	allCompleted, overallStatus := c.processPipelinesWithJobTracking(pollCtx, pipelines, tracker)
+	return overallStatus, allCompleted, nil
+}
+
+// reportPipelineOutcome renders the final summary line for a finished pipeline.
+func (c *Client) reportPipelineOutcome(status string, elapsed time.Duration) {
+	if status == statusSuccess {
+		c.updatableLog.Success("Pipeline completed successfully - total time: " +
+			timeutil.FormatDuration(elapsed))
+		return
+	}
+
+	msg := "Pipeline failed - total time: " + timeutil.FormatDuration(elapsed)
+	handle := c.updatableLog.InfoHandle(msg)
+	handle.Error(msg)
 }
 
 // ApproveMergeRequest approves a merge request by its internal ID.
 //
 // Parameters:
 //   - mrIID: the merge request internal ID (IID), not the global ID
-func (c *Client) ApproveMergeRequest(mrIID int64) error {
+func (c *Client) ApproveMergeRequest(ctx context.Context, mrIID int64) error {
+	// Bound the operation so a stalled response cannot hang a caller whose own
+	// context carries no deadline.
+	ctx, cancel := context.WithTimeout(ctx, polling.PerCallTimeout)
+	defer cancel()
+
 	c.log.Debug(fmt.Sprintf("Approving merge request, IID: %d", mrIID))
 
-	_, _, err := c.client.MergeRequestApprovals.ApproveMergeRequest(c.projectID, mrIID, nil)
+	_, _, err := c.client.MergeRequestApprovals.ApproveMergeRequest(c.projectID, mrIID, nil, gitlab.WithContext(ctx))
 	if err != nil {
 		return fmt.Errorf("failed to approve merge request: %w", err)
 	}
@@ -297,7 +367,12 @@ func (c *Client) ApproveMergeRequest(mrIID int64) error {
 //   - mrIID: the merge request internal ID
 //   - squash: if true, commits are squashed and commitTitle is used as squash commit message
 //   - commitTitle: the merge/squash commit message
-func (c *Client) MergeMergeRequest(mrIID int64, squash bool, commitTitle string) error {
+func (c *Client) MergeMergeRequest(ctx context.Context, mrIID int64, squash bool, commitTitle string) error {
+	// Bound the operation so a stalled response cannot hang a caller whose own
+	// context carries no deadline.
+	ctx, cancel := context.WithTimeout(ctx, polling.OperationTimeout)
+	defer cancel()
+
 	c.log.Debug(fmt.Sprintf("Merging merge request, IID: %d", mrIID))
 
 	mergeOptions := &gitlab.AcceptMergeRequestOptions{
@@ -312,7 +387,7 @@ func (c *Client) MergeMergeRequest(mrIID int64, squash bool, commitTitle string)
 		mergeOptions.MergeCommitMessage = new(commitTitle)
 	}
 
-	_, _, err := c.client.MergeRequests.AcceptMergeRequest(c.projectID, mrIID, mergeOptions)
+	_, _, err := c.client.MergeRequests.AcceptMergeRequest(c.projectID, mrIID, mergeOptions, gitlab.WithContext(ctx))
 	if err != nil {
 		return fmt.Errorf("failed to merge MR: %w", err)
 	}
@@ -322,11 +397,18 @@ func (c *Client) MergeMergeRequest(mrIID int64, squash bool, commitTitle string)
 }
 
 // GetMergeRequestsByBranch returns all open merge requests for the given source branch.
-func (c *Client) GetMergeRequestsByBranch(sourceBranch string) ([]*gitlab.BasicMergeRequest, error) {
+func (c *Client) GetMergeRequestsByBranch(
+	ctx context.Context, sourceBranch string,
+) ([]*gitlab.BasicMergeRequest, error) {
+	// Bound the operation so a stalled response cannot hang a caller whose own
+	// context carries no deadline.
+	ctx, cancel := context.WithTimeout(ctx, polling.PerCallTimeout)
+	defer cancel()
+
 	mrs, _, err := c.client.MergeRequests.ListProjectMergeRequests(c.projectID, &gitlab.ListProjectMergeRequestsOptions{
 		SourceBranch: &sourceBranch,
 		State:        new("opened"),
-	})
+	}, gitlab.WithContext(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("failed to list merge requests: %w", err)
 	}
@@ -336,10 +418,10 @@ func (c *Client) GetMergeRequestsByBranch(sourceBranch string) ([]*gitlab.BasicM
 
 // processPipelinesWithJobTracking evaluates all pipeline statuses using jobTracker for individual job display.
 func (c *Client) processPipelinesWithJobTracking(
-	pipelines []*gitlab.PipelineInfo, tracker *jobTracker,
+	ctx context.Context, pipelines []*gitlab.PipelineInfo, tracker *jobTracker,
 ) (bool, string) {
 	// Fetch jobs for all pipelines in parallel
-	allJobs, failedPipelines := c.fetchJobsForPipelines(pipelines)
+	allJobs, failedPipelines := c.fetchJobsForPipelines(ctx, pipelines)
 
 	// If no jobs found, fall back to pipeline-level view with individual spinners
 	if len(allJobs) == 0 {
@@ -364,7 +446,7 @@ func (c *Client) processPipelinesWithJobTracking(
 
 // fetchJobsForPipelines fetches jobs for multiple pipelines concurrently.
 func (c *Client) fetchJobsForPipelines(
-	pipelines []*gitlab.PipelineInfo,
+	ctx context.Context, pipelines []*gitlab.PipelineInfo,
 ) ([]*Job, []*gitlab.PipelineInfo) {
 	type pipelineJobs struct {
 		pipelineID int64
@@ -380,7 +462,7 @@ func (c *Client) fetchJobsForPipelines(
 		wg.Add(1)
 		go func(p *gitlab.PipelineInfo) {
 			defer wg.Done()
-			jobs, err := c.fetchPipelineJobs(p.ID)
+			jobs, err := c.fetchPipelineJobs(ctx, p.ID)
 			resultChan <- pipelineJobs{
 				pipelineID: p.ID,
 				jobs:       jobs,
@@ -512,13 +594,14 @@ func (c *Client) convertPipelinesToJobs(pipelines []*gitlab.PipelineInfo) []*Job
 }
 
 // hasPipelineRuns checks if there are any pipeline runs (in any state) for this MR.
-func (c *Client) hasPipelineRuns() bool {
+func (c *Client) hasPipelineRuns(ctx context.Context) bool {
 	// Check for pipelines associated with this commit SHA
 	pipelines, _, err := c.client.Pipelines.ListProjectPipelines(
 		c.projectID,
 		&gitlab.ListProjectPipelinesOptions{
 			SHA: new(c.mrSHA),
 		},
+		gitlab.WithContext(ctx),
 	)
 	if err != nil {
 		c.log.Debug(fmt.Sprintf("Failed to list project pipelines, assuming pipelines exist - error: %v", err))
@@ -534,7 +617,7 @@ func (c *Client) hasPipelineRuns() bool {
 }
 
 // fetchPipelineJobs fetches all jobs for a given pipeline with pagination support.
-func (c *Client) fetchPipelineJobs(pipelineID int64) ([]*Job, error) {
+func (c *Client) fetchPipelineJobs(ctx context.Context, pipelineID int64) ([]*Job, error) {
 	c.log.Debug(fmt.Sprintf("Fetching jobs for pipeline %d", pipelineID))
 
 	var allJobs []*Job
@@ -551,6 +634,7 @@ func (c *Client) fetchPipelineJobs(pipelineID int64) ([]*Job, error) {
 					PerPage: perPage,
 				},
 			},
+			gitlab.WithContext(ctx),
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to list pipeline jobs: %w", err)

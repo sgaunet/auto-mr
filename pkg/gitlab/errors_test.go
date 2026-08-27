@@ -1,6 +1,7 @@
 package gitlab_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -18,7 +19,7 @@ func TestErrorTokenRequired(t *testing.T) {
 		mockAPI := mocks.NewGitLabAPIClient()
 		mockAPI.ListLabelsError = gitlab.ErrTokenRequired
 
-		_, err := mockAPI.ListLabels()
+		_, err := mockAPI.ListLabels(t.Context())
 		if err == nil || err != gitlab.ErrTokenRequired {
 			t.Error("Expected ErrTokenRequired")
 		}
@@ -34,7 +35,7 @@ func TestErrorInvalidURLFormat(t *testing.T) {
 			mockAPI := mocks.NewGitLabAPIClient()
 			mockAPI.SetProjectFromURLError = gitlab.ErrInvalidURLFormat
 
-			err := mockAPI.SetProjectFromURL(url)
+			err := mockAPI.SetProjectFromURL(t.Context(), url)
 			if err == nil {
 				t.Error("Expected error for invalid URL")
 			}
@@ -48,7 +49,7 @@ func TestErrorPipelineTimeout(t *testing.T) {
 		mockAPI := mocks.NewGitLabAPIClient()
 		mockAPI.WaitForPipelineError = gitlab.ErrPipelineTimeout
 
-		_, err := mockAPI.WaitForPipeline(1 * time.Millisecond)
+		_, err := mockAPI.WaitForPipeline(t.Context(), 1*time.Millisecond)
 		if err == nil || err != gitlab.ErrPipelineTimeout {
 			t.Error("Expected ErrPipelineTimeout")
 		}
@@ -61,7 +62,7 @@ func TestErrorMRNotFound(t *testing.T) {
 		mockAPI := mocks.NewGitLabAPIClient()
 		mockAPI.GetMergeRequestByBranchError = gitlab.ErrMRNotFound
 
-		_, err := mockAPI.GetMergeRequestByBranch("nonexistent", "main")
+		_, err := mockAPI.GetMergeRequestByBranch(t.Context(), "nonexistent", "main")
 		if err == nil || err != gitlab.ErrMRNotFound {
 			t.Error("Expected ErrMRNotFound")
 		}
@@ -130,7 +131,7 @@ func TestErrorMRAlreadyExists(t *testing.T) {
 				mockAPI.CreateMergeRequestError = errors.New(scenario.apiError)
 			}
 
-			_, err := mockAPI.CreateMergeRequest("feature", "main", "Test", "Desc", "", "", []string{}, false)
+			_, err := mockAPI.CreateMergeRequest(t.Context(), "feature", "main", "Test", "Desc", "", "", []string{}, false)
 
 			if scenario.expectMatch {
 				if !errors.Is(err, gitlab.ErrMRAlreadyExists) {
@@ -159,7 +160,7 @@ func TestErrorMRAlreadyExistsWorkflow(t *testing.T) {
 			gitlab.ErrMRAlreadyExists)
 		mockAPI.CreateMergeRequestError = wrappedErr
 
-		_, err := mockAPI.CreateMergeRequest("feature", "main", "Test", "Desc", "", "", []string{}, false)
+		_, err := mockAPI.CreateMergeRequest(t.Context(), "feature", "main", "Test", "Desc", "", "", []string{}, false)
 		if !errors.Is(err, gitlab.ErrMRAlreadyExists) {
 			t.Errorf("Expected ErrMRAlreadyExists on first attempt, got %v", err)
 		}
@@ -168,7 +169,7 @@ func TestErrorMRAlreadyExistsWorkflow(t *testing.T) {
 		mockAPI.GetMergeRequestByBranchError = nil
 		mockAPI.GetMergeRequestByBranchResponse = fixtures.ValidMergeRequest()
 
-		existingMR, fetchErr := mockAPI.GetMergeRequestByBranch("feature", "main")
+		existingMR, fetchErr := mockAPI.GetMergeRequestByBranch(t.Context(), "feature", "main")
 		if fetchErr != nil {
 			t.Fatalf("Failed to fetch existing MR: %v", fetchErr)
 		}
@@ -185,7 +186,7 @@ func TestErrorMRAlreadyExistsWorkflow(t *testing.T) {
 			gitlab.ErrMRAlreadyExists, originalErr)
 		mockAPI.CreateMergeRequestError = wrappedErr
 
-		_, err := mockAPI.CreateMergeRequest("feature-123", "develop", "Test", "Desc", "", "", []string{}, false)
+		_, err := mockAPI.CreateMergeRequest(t.Context(), "feature-123", "develop", "Test", "Desc", "", "", []string{}, false)
 
 		// Verify typed error is detectable
 		if !errors.Is(err, gitlab.ErrMRAlreadyExists) {
@@ -218,7 +219,7 @@ func TestErrorAPIFailures(t *testing.T) {
 				m.ListLabelsError = gitlab.ErrTokenRequired
 			},
 			testFunc: func(m *mocks.GitLabAPIClient) error {
-				_, err := m.ListLabels()
+				_, err := m.ListLabels(context.Background())
 				return err
 			},
 		},
@@ -228,7 +229,7 @@ func TestErrorAPIFailures(t *testing.T) {
 				m.CreateMergeRequestError = gitlab.ErrInvalidURLFormat
 			},
 			testFunc: func(m *mocks.GitLabAPIClient) error {
-				_, err := m.CreateMergeRequest("feature", "main", "Test", "Desc", "", "", []string{}, false)
+				_, err := m.CreateMergeRequest(context.Background(), "feature", "main", "Test", "Desc", "", "", []string{}, false)
 				return err
 			},
 		},
@@ -238,7 +239,7 @@ func TestErrorAPIFailures(t *testing.T) {
 				m.MergeMergeRequestError = gitlab.ErrMRNotFound
 			},
 			testFunc: func(m *mocks.GitLabAPIClient) error {
-				return m.MergeMergeRequest(123, false, "Test commit")
+				return m.MergeMergeRequest(context.Background(), 123, false, "Test commit")
 			},
 		},
 		{
@@ -247,7 +248,7 @@ func TestErrorAPIFailures(t *testing.T) {
 				m.ApproveMergeRequestError = gitlab.ErrTokenRequired
 			},
 			testFunc: func(m *mocks.GitLabAPIClient) error {
-				return m.ApproveMergeRequest(123)
+				return m.ApproveMergeRequest(context.Background(), 123)
 			},
 		},
 	}
@@ -272,7 +273,7 @@ func TestErrorRecovery(t *testing.T) {
 
 		// First attempt - fails
 		mockAPI.CreateMergeRequestError = gitlab.ErrTokenRequired
-		_, err := mockAPI.CreateMergeRequest("feature", "main", "Test", "Desc", "", "", []string{}, false)
+		_, err := mockAPI.CreateMergeRequest(t.Context(), "feature", "main", "Test", "Desc", "", "", []string{}, false)
 		if err == nil {
 			t.Error("Expected first attempt to fail")
 		}
@@ -280,7 +281,7 @@ func TestErrorRecovery(t *testing.T) {
 		// Second attempt - succeeds
 		mockAPI.CreateMergeRequestError = nil
 		mockAPI.CreateMergeRequestResponse = fixtures.ValidMergeRequest()
-		_, err = mockAPI.CreateMergeRequest("feature", "main", "Test", "Desc", "", "", []string{}, false)
+		_, err = mockAPI.CreateMergeRequest(t.Context(), "feature", "main", "Test", "Desc", "", "", []string{}, false)
 		if err != nil {
 			t.Error("Expected second attempt to succeed")
 		}

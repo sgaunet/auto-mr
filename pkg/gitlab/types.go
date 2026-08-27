@@ -1,6 +1,7 @@
 package gitlab
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -59,6 +60,15 @@ type Job struct {
 
 // jobTracker tracks jobs and their display handles/spinners with thread-safe access.
 type jobTracker struct {
+	// ctx scopes the spinners and refresh goroutines this tracker owns; cancel is
+	// invoked by Stop to tear them down deterministically.
+	//
+	//nolint:containedctx // The tracker is a scoped worker created per wait and torn
+	// down by Stop, and bullets.SpinnerCircle requires a context to stop its
+	// animation, so the lifetime is owned here rather than passed per call.
+	ctx    context.Context
+	cancel context.CancelFunc
+
 	mu       sync.RWMutex
 	jobs     map[int64]*Job
 	handles  map[int64]*bullets.BulletHandle

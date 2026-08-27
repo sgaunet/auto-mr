@@ -17,7 +17,7 @@ func TestWorkflowPRCreationToMerge(t *testing.T) {
 
 		// Step 1: Create PR
 		mockAPI.CreatePullRequestResponse = fixtures.ValidPullRequest()
-		pr, err := mockAPI.CreatePullRequest(
+		pr, err := mockAPI.CreatePullRequest(t.Context(),
 			"feature", "main", "Test PR", "Description",
 			[]string{"user1"}, []string{"reviewer1"}, []string{"bug"},
 		)
@@ -30,7 +30,7 @@ func TestWorkflowPRCreationToMerge(t *testing.T) {
 
 		// Step 2: Wait for workflows
 		mockAPI.WaitForWorkflowsConclusion = "success"
-		conclusion, err := mockAPI.WaitForWorkflows(5 * time.Minute)
+		conclusion, err := mockAPI.WaitForWorkflows(t.Context(), 5*time.Minute)
 		if err != nil {
 			t.Fatalf("Workflow wait failed: %v", err)
 		}
@@ -39,7 +39,7 @@ func TestWorkflowPRCreationToMerge(t *testing.T) {
 		}
 
 		// Step 3: Merge PR
-		err = mockAPI.MergePullRequest(*pr.Number, "squash", "Test commit")
+		err = mockAPI.MergePullRequest(t.Context(), *pr.Number, "squash", "Test commit")
 		if err != nil {
 			t.Fatalf("Failed to merge PR: %v", err)
 		}
@@ -61,7 +61,7 @@ func TestWorkflowPRCreationToMerge(t *testing.T) {
 
 		// Create PR
 		mockAPI.CreatePullRequestResponse = fixtures.ValidPullRequest()
-		_, err := mockAPI.CreatePullRequest(
+		_, err := mockAPI.CreatePullRequest(t.Context(),
 			"feature", "main", "Test PR", "Description",
 			nil, nil, nil,
 		)
@@ -71,7 +71,7 @@ func TestWorkflowPRCreationToMerge(t *testing.T) {
 
 		// Wait for workflows - they fail
 		mockAPI.WaitForWorkflowsConclusion = "failure"
-		conclusion, err := mockAPI.WaitForWorkflows(5 * time.Minute)
+		conclusion, err := mockAPI.WaitForWorkflows(t.Context(), 5*time.Minute)
 		if err != nil {
 			t.Fatalf("Workflow wait failed: %v", err)
 		}
@@ -103,21 +103,21 @@ func TestWorkflowPRUpdateAndRetry(t *testing.T) {
 
 		// Create PR
 		mockAPI.CreatePullRequestResponse = fixtures.ValidPullRequest()
-		pr, _ := mockAPI.CreatePullRequest(
+		pr, _ := mockAPI.CreatePullRequest(t.Context(),
 			"feature", "main", "Test PR", "Description",
 			nil, nil, nil,
 		)
 
 		// First attempt - workflows fail
 		mockAPI.WaitForWorkflowsConclusion = "failure"
-		conclusion1, _ := mockAPI.WaitForWorkflows(5 * time.Minute)
+		conclusion1, _ := mockAPI.WaitForWorkflows(t.Context(), 5*time.Minute)
 		if conclusion1 != "failure" {
 			t.Errorf("Expected first attempt to fail, got %s", conclusion1)
 		}
 
 		// After fixing code, retry - workflows succeed
 		mockAPI.WaitForWorkflowsConclusion = "success"
-		conclusion2, err := mockAPI.WaitForWorkflows(5 * time.Minute)
+		conclusion2, err := mockAPI.WaitForWorkflows(t.Context(), 5*time.Minute)
 		if err != nil {
 			t.Fatalf("Second workflow wait failed: %v", err)
 		}
@@ -126,7 +126,7 @@ func TestWorkflowPRUpdateAndRetry(t *testing.T) {
 		}
 
 		// Now merge
-		err = mockAPI.MergePullRequest(*pr.Number, "squash", "Test commit")
+		err = mockAPI.MergePullRequest(t.Context(), *pr.Number, "squash", "Test commit")
 		if err != nil {
 			t.Fatalf("Failed to merge PR: %v", err)
 		}
@@ -148,7 +148,7 @@ func TestWorkflowConcurrentPRs(t *testing.T) {
 		// Create multiple PRs
 		branches := []string{"feature-1", "feature-2", "feature-3"}
 		for _, branch := range branches {
-			pr, err := mockAPI.CreatePullRequest(
+			pr, err := mockAPI.CreatePullRequest(t.Context(),
 				branch, "main", "Test PR", "Description",
 				nil, nil, nil,
 			)
@@ -173,7 +173,7 @@ func TestWorkflowConcurrentPRs(t *testing.T) {
 			fixtures.ValidPullRequest(),
 		}
 
-		prs, err := mockAPI.GetPullRequestsByHead("feature-branch")
+		prs, err := mockAPI.GetPullRequestsByHead(t.Context(), "feature-branch")
 		if err != nil {
 			t.Fatalf("Failed to list PRs: %v", err)
 		}
@@ -191,21 +191,21 @@ func TestWorkflowBranchCleanup(t *testing.T) {
 
 		// Create and merge PR
 		mockAPI.CreatePullRequestResponse = fixtures.ValidPullRequest()
-		pr, _ := mockAPI.CreatePullRequest(
+		pr, _ := mockAPI.CreatePullRequest(t.Context(),
 			"feature", "main", "Test PR", "Description",
 			nil, nil, nil,
 		)
 
 		mockAPI.WaitForWorkflowsConclusion = "success"
-		_, _ = mockAPI.WaitForWorkflows(5 * time.Minute)
+		_, _ = mockAPI.WaitForWorkflows(t.Context(), 5*time.Minute)
 
-		err := mockAPI.MergePullRequest(*pr.Number, "squash", "Test commit")
+		err := mockAPI.MergePullRequest(t.Context(), *pr.Number, "squash", "Test commit")
 		if err != nil {
 			t.Fatalf("Failed to merge PR: %v", err)
 		}
 
 		// Clean up branch
-		err = mockAPI.DeleteBranch("feature")
+		err = mockAPI.DeleteBranch(t.Context(), "feature")
 		if err != nil {
 			t.Fatalf("Failed to delete branch: %v", err)
 		}
@@ -229,7 +229,7 @@ func TestWorkflowFindExistingPR(t *testing.T) {
 
 		// Find existing PR
 		mockAPI.GetPullRequestByBranchResponse = fixtures.ValidPullRequest()
-		pr, err := mockAPI.GetPullRequestByBranch("feature", "main")
+		pr, err := mockAPI.GetPullRequestByBranch(t.Context(), "feature", "main")
 		if err != nil {
 			t.Fatalf("Failed to find PR: %v", err)
 		}
@@ -239,13 +239,13 @@ func TestWorkflowFindExistingPR(t *testing.T) {
 
 		// Wait for workflows
 		mockAPI.WaitForWorkflowsConclusion = "success"
-		conclusion, _ := mockAPI.WaitForWorkflows(5 * time.Minute)
+		conclusion, _ := mockAPI.WaitForWorkflows(t.Context(), 5*time.Minute)
 		if conclusion != "success" {
 			t.Errorf("Expected success, got %s", conclusion)
 		}
 
 		// Merge existing PR
-		err = mockAPI.MergePullRequest(*pr.Number, "merge", "Test commit")
+		err = mockAPI.MergePullRequest(t.Context(), *pr.Number, "merge", "Test commit")
 		if err != nil {
 			t.Fatalf("Failed to merge existing PR: %v", err)
 		}
@@ -264,7 +264,7 @@ func TestWorkflowFindExistingPR(t *testing.T) {
 
 		// Try to find non-existent PR
 		mockAPI.GetPullRequestByBranchError = ghpkg.ErrPRNotFound
-		_, err := mockAPI.GetPullRequestByBranch("nonexistent", "main")
+		_, err := mockAPI.GetPullRequestByBranch(t.Context(), "nonexistent", "main")
 		if err == nil {
 			t.Error("Expected error for non-existent PR")
 		}
@@ -272,7 +272,7 @@ func TestWorkflowFindExistingPR(t *testing.T) {
 		// Should create new PR
 		mockAPI.CreatePullRequestResponse = fixtures.ValidPullRequest()
 		mockAPI.CreatePullRequestError = nil
-		pr, err := mockAPI.CreatePullRequest(
+		pr, err := mockAPI.CreatePullRequest(t.Context(),
 			"nonexistent", "main", "New PR", "Description",
 			nil, nil, nil,
 		)
@@ -302,17 +302,17 @@ func TestWorkflowMergeStrategies(t *testing.T) {
 
 			// Create PR
 			mockAPI.CreatePullRequestResponse = fixtures.ValidPullRequest()
-			pr, _ := mockAPI.CreatePullRequest(
+			pr, _ := mockAPI.CreatePullRequest(t.Context(),
 				"feature", "main", "Test PR", "Description",
 				nil, nil, nil,
 			)
 
 			// Wait for success
 			mockAPI.WaitForWorkflowsConclusion = "success"
-			_, _ = mockAPI.WaitForWorkflows(5 * time.Minute)
+			_, _ = mockAPI.WaitForWorkflows(t.Context(), 5*time.Minute)
 
 			// Merge with specific strategy
-			err := mockAPI.MergePullRequest(*pr.Number, strategy.method, "Test commit")
+			err := mockAPI.MergePullRequest(t.Context(), *pr.Number, strategy.method, "Test commit")
 			if err != nil {
 				t.Fatalf("Failed to merge with %s: %v", strategy.method, err)
 			}
@@ -338,14 +338,14 @@ func TestWorkflowWithLabels(t *testing.T) {
 			{Name: "enhancement"},
 			{Name: "urgent"},
 		}
-		labels, _ := mockAPI.ListLabels()
+		labels, _ := mockAPI.ListLabels(t.Context())
 		if len(labels) != 3 {
 			t.Errorf("Expected 3 labels, got %d", len(labels))
 		}
 
 		// Create PR with selected labels
 		mockAPI.CreatePullRequestResponse = fixtures.ValidPullRequest()
-		pr, err := mockAPI.CreatePullRequest(
+		pr, err := mockAPI.CreatePullRequest(t.Context(),
 			"bugfix", "main", "Fix critical bug", "Description",
 			nil, nil, []string{"bug", "urgent"},
 		)
@@ -365,8 +365,8 @@ func TestWorkflowWithLabels(t *testing.T) {
 
 		// Complete workflow
 		mockAPI.WaitForWorkflowsConclusion = "success"
-		_, _ = mockAPI.WaitForWorkflows(5 * time.Minute)
-		_ = mockAPI.MergePullRequest(*pr.Number, "squash", "Test commit")
+		_, _ = mockAPI.WaitForWorkflows(t.Context(), 5*time.Minute)
+		_ = mockAPI.MergePullRequest(t.Context(), *pr.Number, "squash", "Test commit")
 	})
 }
 
@@ -378,7 +378,7 @@ func TestWorkflowTimeouts(t *testing.T) {
 		// Simulate timeout
 		mockAPI.WaitForWorkflowsError = ghpkg.ErrWorkflowTimeout
 
-		_, err := mockAPI.WaitForWorkflows(1 * time.Millisecond)
+		_, err := mockAPI.WaitForWorkflows(t.Context(), 1*time.Millisecond)
 		if err == nil {
 			t.Error("Expected timeout error")
 		}
@@ -391,7 +391,7 @@ func TestWorkflowTimeouts(t *testing.T) {
 		mockAPI := mocks.NewGitHubAPIClient()
 
 		mockAPI.WaitForWorkflowsConclusion = "success"
-		conclusion, err := mockAPI.WaitForWorkflows(30 * time.Minute)
+		conclusion, err := mockAPI.WaitForWorkflows(t.Context(), 30*time.Minute)
 		if err != nil {
 			t.Fatalf("Unexpected error: %v", err)
 		}
@@ -408,7 +408,7 @@ func TestWorkflowStateValidation(t *testing.T) {
 
 		// Try to find PR first
 		mockAPI.GetPullRequestByBranchResponse = fixtures.ValidPullRequest()
-		pr, err := mockAPI.GetPullRequestByBranch("feature", "main")
+		pr, err := mockAPI.GetPullRequestByBranch(t.Context(), "feature", "main")
 		if err != nil {
 			t.Fatalf("Failed to find PR: %v", err)
 		}
@@ -423,7 +423,7 @@ func TestWorkflowStateValidation(t *testing.T) {
 
 		// Proceed with workflow
 		mockAPI.WaitForWorkflowsConclusion = "success"
-		_, _ = mockAPI.WaitForWorkflows(5 * time.Minute)
-		_ = mockAPI.MergePullRequest(*pr.Number, "squash", "Test commit")
+		_, _ = mockAPI.WaitForWorkflows(t.Context(), 5*time.Minute)
+		_ = mockAPI.MergePullRequest(t.Context(), *pr.Number, "squash", "Test commit")
 	})
 }

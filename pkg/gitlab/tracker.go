@@ -9,12 +9,26 @@ import (
 )
 
 // newJobTracker creates a new job tracker with initialized maps.
-func newJobTracker() *jobTracker {
+//
+// The tracker owns a context derived from ctx, which scopes both the spinner
+// animations it creates and its own refresh goroutines. Callers must call [Stop] when
+// the wait ends, including on error: a job left in a running state would otherwise
+// keep its goroutine ticking, since those loops exit only when the job data reaches a
+// terminal state.
+func newJobTracker(ctx context.Context) *jobTracker {
+	ctx, cancel := context.WithCancel(ctx)
 	return &jobTracker{
+		ctx:      ctx,
+		cancel:   cancel,
 		jobs:     make(map[int64]*Job),
 		handles:  make(map[int64]*bullets.BulletHandle),
 		spinners: make(map[int64]*bullets.Spinner),
 	}
+}
+
+// Stop tears down the tracker's spinners and refresh goroutines.
+func (jt *jobTracker) Stop() {
+	jt.cancel()
 }
 
 // getJob retrieves a job by ID with read lock.
@@ -116,7 +130,7 @@ func (jt *jobTracker) handleNewJob(newJob *Job, logger *bullets.UpdatableLogger)
 	statusText := formatJobStatus(newJob)
 
 	if newJob.Status == statusRunning || newJob.Status == statusPending {
-		spinner := logger.SpinnerCircle(context.Background(), statusText)
+		spinner := logger.SpinnerCircle(jt.ctx, statusText)
 		jt.setSpinner(newJob.ID, spinner)
 		// Start time update loop for any job with spinner that has started timing
 		if newJob.StartedAt != nil {
@@ -247,7 +261,7 @@ func (jt *jobTracker) transitionJobToRunning(logger *bullets.UpdatableLogger, jo
 	}
 
 	// Create new animated spinner (only if doesn't exist)
-	spinner := logger.SpinnerCircle(context.Background(), statusText)
+	spinner := logger.SpinnerCircle(jt.ctx, statusText)
 	jt.setSpinner(jobID, spinner)
 
 	// Start time update loop for this spinner
@@ -288,7 +302,13 @@ func (jt *jobTracker) updateSpinnerLoop(jobID int64, spinner *bullets.Spinner) {
 	ticker := time.NewTicker(spinnerUpdateInterval)
 	defer ticker.Stop()
 
-	for range ticker.C {
+	for {
+		select {
+		case <-jt.ctx.Done():
+			return
+		case <-ticker.C:
+		}
+
 		job, exists := jt.getJob(jobID)
 
 		// Stop if job no longer exists

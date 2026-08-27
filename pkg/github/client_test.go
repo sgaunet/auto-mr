@@ -42,7 +42,7 @@ func TestNewClientWhitespaceTokenTrimmed(t *testing.T) {
 		}
 	}()
 
-	_, err := ghpkg.NewClient()
+	_, err := ghpkg.NewClient(t.Context())
 	if !errors.Is(err, ghpkg.ErrTokenRequired) {
 		t.Errorf("expected ErrTokenRequired for whitespace-only token, got: %v", err)
 	}
@@ -105,7 +105,7 @@ func TestSetRepositoryFromURL(t *testing.T) {
 				mockAPI.SetRepositoryFromURLError = ghpkg.ErrInvalidURLFormat
 			}
 
-			err := mockAPI.SetRepositoryFromURL(tt.url)
+			err := mockAPI.SetRepositoryFromURL(t.Context(), tt.url)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("SetRepositoryFromURL() error = %v, wantErr %v", err, tt.wantErr)
 			}
@@ -138,7 +138,7 @@ func TestListLabels(t *testing.T) {
 			{Name: "documentation"},
 		}
 
-		labels, err := mockAPI.ListLabels()
+		labels, err := mockAPI.ListLabels(t.Context())
 		if err != nil {
 			t.Fatalf("Unexpected error: %v", err)
 		}
@@ -159,7 +159,7 @@ func TestListLabels(t *testing.T) {
 		mockAPI := mocks.NewGitHubAPIClient()
 		mockAPI.ListLabelsError = ghpkg.ErrTokenRequired
 
-		_, err := mockAPI.ListLabels()
+		_, err := mockAPI.ListLabels(t.Context())
 		if err == nil {
 			t.Error("Expected error, got nil")
 		}
@@ -169,7 +169,7 @@ func TestListLabels(t *testing.T) {
 		mockAPI := mocks.NewGitHubAPIClient()
 		mockAPI.ListLabelsResponse = []*ghpkg.Label{}
 
-		labels, err := mockAPI.ListLabels()
+		labels, err := mockAPI.ListLabels(t.Context())
 		if err != nil {
 			t.Fatalf("Unexpected error: %v", err)
 		}
@@ -194,7 +194,7 @@ func TestCreatePullRequest(t *testing.T) {
 		reviewers := []string{"reviewer1"}
 		labels := []string{"bug", "urgent"}
 
-		pr, err := mockAPI.CreatePullRequest(head, base, title, body, assignees, reviewers, labels)
+		pr, err := mockAPI.CreatePullRequest(t.Context(), head, base, title, body, assignees, reviewers, labels)
 		if err != nil {
 			t.Fatalf("Unexpected error: %v", err)
 		}
@@ -224,7 +224,7 @@ func TestCreatePullRequest(t *testing.T) {
 		mockAPI := mocks.NewGitHubAPIClient()
 		mockAPI.CreatePullRequestResponse = fixtures.ValidPullRequest()
 
-		pr, err := mockAPI.CreatePullRequest("feature", "main", "Title", "Body", nil, nil, nil)
+		pr, err := mockAPI.CreatePullRequest(t.Context(), "feature", "main", "Title", "Body", nil, nil, nil)
 		if err != nil {
 			t.Fatalf("Unexpected error: %v", err)
 		}
@@ -238,7 +238,7 @@ func TestCreatePullRequest(t *testing.T) {
 		mockAPI := mocks.NewGitHubAPIClient()
 		mockAPI.CreatePullRequestError = ghpkg.ErrInvalidURLFormat
 
-		_, err := mockAPI.CreatePullRequest("feature", "main", "Title", "Body", nil, nil, nil)
+		_, err := mockAPI.CreatePullRequest(t.Context(), "feature", "main", "Title", "Body", nil, nil, nil)
 		if err == nil {
 			t.Error("Expected error, got nil")
 		}
@@ -251,7 +251,7 @@ func TestGetPullRequestByBranch(t *testing.T) {
 		mockAPI := mocks.NewGitHubAPIClient()
 		mockAPI.GetPullRequestByBranchResponse = fixtures.ValidPullRequest()
 
-		pr, err := mockAPI.GetPullRequestByBranch("feature", "main")
+		pr, err := mockAPI.GetPullRequestByBranch(t.Context(), "feature", "main")
 		if err != nil {
 			t.Fatalf("Unexpected error: %v", err)
 		}
@@ -265,7 +265,7 @@ func TestGetPullRequestByBranch(t *testing.T) {
 		mockAPI := mocks.NewGitHubAPIClient()
 		mockAPI.GetPullRequestByBranchError = ghpkg.ErrPRNotFound
 
-		_, err := mockAPI.GetPullRequestByBranch("nonexistent", "main")
+		_, err := mockAPI.GetPullRequestByBranch(t.Context(), "nonexistent", "main")
 		if err == nil {
 			t.Error("Expected error for non-existent PR")
 		}
@@ -278,7 +278,7 @@ func TestWaitForWorkflows(t *testing.T) {
 		mockAPI := mocks.NewGitHubAPIClient()
 		mockAPI.WaitForWorkflowsConclusion = "success"
 
-		conclusion, err := mockAPI.WaitForWorkflows(5 * time.Minute)
+		conclusion, err := mockAPI.WaitForWorkflows(t.Context(), 5*time.Minute)
 		if err != nil {
 			t.Fatalf("Unexpected error: %v", err)
 		}
@@ -292,7 +292,7 @@ func TestWaitForWorkflows(t *testing.T) {
 		mockAPI := mocks.NewGitHubAPIClient()
 		mockAPI.WaitForWorkflowsConclusion = "failure"
 
-		conclusion, err := mockAPI.WaitForWorkflows(5 * time.Minute)
+		conclusion, err := mockAPI.WaitForWorkflows(t.Context(), 5*time.Minute)
 		if err != nil {
 			t.Fatalf("Unexpected error: %v", err)
 		}
@@ -306,7 +306,7 @@ func TestWaitForWorkflows(t *testing.T) {
 		mockAPI := mocks.NewGitHubAPIClient()
 		mockAPI.WaitForWorkflowsError = ghpkg.ErrWorkflowTimeout
 
-		_, err := mockAPI.WaitForWorkflows(1 * time.Second)
+		_, err := mockAPI.WaitForWorkflows(t.Context(), 1*time.Second)
 		if err == nil {
 			t.Error("Expected timeout error")
 		}
@@ -327,7 +327,7 @@ func TestMergePullRequest(t *testing.T) {
 		t.Run("merge with "+strategy.method, func(t *testing.T) {
 			mockAPI := mocks.NewGitHubAPIClient()
 
-			err := mockAPI.MergePullRequest(123, strategy.method, "Test commit")
+			err := mockAPI.MergePullRequest(t.Context(), 123, strategy.method, "Test commit")
 			if err != nil {
 				t.Fatalf("Unexpected error: %v", err)
 			}
@@ -348,7 +348,7 @@ func TestMergePullRequest(t *testing.T) {
 		mockAPI := mocks.NewGitHubAPIClient()
 		mockAPI.MergePullRequestError = ghpkg.ErrInvalidURLFormat
 
-		err := mockAPI.MergePullRequest(123, "merge", "Test commit")
+		err := mockAPI.MergePullRequest(t.Context(), 123, "merge", "Test commit")
 		if err == nil {
 			t.Error("Expected merge error")
 		}
@@ -363,7 +363,7 @@ func TestGetPullRequestsByHead(t *testing.T) {
 			fixtures.ValidPullRequest(),
 		}
 
-		prs, err := mockAPI.GetPullRequestsByHead("feature")
+		prs, err := mockAPI.GetPullRequestsByHead(t.Context(), "feature")
 		if err != nil {
 			t.Fatalf("Unexpected error: %v", err)
 		}
@@ -377,7 +377,7 @@ func TestGetPullRequestsByHead(t *testing.T) {
 		mockAPI := mocks.NewGitHubAPIClient()
 		mockAPI.GetPullRequestsByHeadResponse = []*github.PullRequest{}
 
-		prs, err := mockAPI.GetPullRequestsByHead("nonexistent")
+		prs, err := mockAPI.GetPullRequestsByHead(t.Context(), "nonexistent")
 		if err != nil {
 			t.Fatalf("Unexpected error: %v", err)
 		}
@@ -393,7 +393,7 @@ func TestDeleteBranch(t *testing.T) {
 	t.Run("successful branch deletion", func(t *testing.T) {
 		mockAPI := mocks.NewGitHubAPIClient()
 
-		err := mockAPI.DeleteBranch("feature-branch")
+		err := mockAPI.DeleteBranch(t.Context(), "feature-branch")
 		if err != nil {
 			t.Fatalf("Unexpected error: %v", err)
 		}
@@ -412,7 +412,7 @@ func TestDeleteBranch(t *testing.T) {
 		mockAPI := mocks.NewGitHubAPIClient()
 		mockAPI.DeleteBranchError = ghpkg.ErrInvalidURLFormat
 
-		err := mockAPI.DeleteBranch("protected-branch")
+		err := mockAPI.DeleteBranch(t.Context(), "protected-branch")
 		if err == nil {
 			t.Error("Expected deletion error")
 		}

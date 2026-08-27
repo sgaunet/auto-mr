@@ -27,7 +27,7 @@ func TestNewClientMissingToken(t *testing.T) {
 		}
 	}()
 
-	_, err := forgejo.NewClient("https://forgejo.example.com")
+	_, err := forgejo.NewClient(t.Context(), "https://forgejo.example.com")
 	if err == nil {
 		t.Fatal("expected error when FORGEJO_TOKEN is not set, got nil")
 	}
@@ -59,7 +59,7 @@ func TestNewClientWhitespaceTokenTrimmed(t *testing.T) {
 		}
 	}()
 
-	_, err := forgejo.NewClient("https://forgejo.example.com")
+	_, err := forgejo.NewClient(t.Context(), "https://forgejo.example.com")
 	if !errors.Is(err, forgejo.ErrTokenRequired) {
 		t.Errorf("expected ErrTokenRequired for whitespace-only token, got: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestNewClientWithToken(t *testing.T) {
 		}
 	}()
 
-	_, err := forgejo.NewClient("https://forgejo.example.com")
+	_, err := forgejo.NewClient(t.Context(), "https://forgejo.example.com")
 	if err == nil {
 		// Connected to a live server — client is valid.
 		return
@@ -225,7 +225,7 @@ func TestNewClientEmptyBaseURL(t *testing.T) {
 	}()
 
 	for _, base := range []string{"", "   ", "\t"} {
-		_, err := forgejo.NewClient(base)
+		_, err := forgejo.NewClient(t.Context(), base)
 		if err == nil {
 			t.Fatalf("expected error for baseURL=%q, got nil", base)
 		}

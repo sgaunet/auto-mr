@@ -9,6 +9,7 @@ var (
 	errAssigneeNotFound = errors.New("failed to find assignee user")
 	errReviewerNotFound = errors.New("failed to find reviewer user")
 	errPipelineTimeout  = errors.New("timeout waiting for pipeline completion")
+	errPipelineCanceled = errors.New("canceled while waiting for pipeline completion")
 	errMRNotFound       = errors.New("no merge request found for branch")
 	errMRAlreadyExists  = errors.New("merge request already exists for this branch")
 
@@ -22,6 +23,10 @@ var (
 	ErrReviewerNotFound = errReviewerNotFound
 	// ErrPipelineTimeout is returned when waiting for pipeline completion times out.
 	ErrPipelineTimeout = errPipelineTimeout
+	// ErrPipelineCanceled is returned when the caller's context is cancelled while
+	// waiting, for example on interrupt. It is distinct from a timeout so callers can
+	// tell a deliberate abort from an exhausted budget.
+	ErrPipelineCanceled = errPipelineCanceled
 	// ErrMRNotFound is returned when no merge request is found for the branch.
 	ErrMRNotFound = errMRNotFound
 	// ErrMRAlreadyExists is returned when a merge request already exists for the branch.

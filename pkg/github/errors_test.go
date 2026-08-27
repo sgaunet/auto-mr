@@ -17,7 +17,7 @@ func TestErrorTokenRequired(t *testing.T) {
 		mockAPI := mocks.NewGitHubAPIClient()
 		mockAPI.SetRepositoryFromURLError = ghpkg.ErrTokenRequired
 
-		err := mockAPI.SetRepositoryFromURL("https://github.com/owner/repo")
+		err := mockAPI.SetRepositoryFromURL(t.Context(), "https://github.com/owner/repo")
 		if err == nil {
 			t.Error("Expected token required error")
 		}
@@ -52,7 +52,7 @@ func TestErrorInvalidURLFormat(t *testing.T) {
 			mockAPI := mocks.NewGitHubAPIClient()
 			mockAPI.SetRepositoryFromURLError = ghpkg.ErrInvalidURLFormat
 
-			err := mockAPI.SetRepositoryFromURL(url)
+			err := mockAPI.SetRepositoryFromURL(t.Context(), url)
 			if err == nil {
 				t.Errorf("Expected error for invalid URL: %s", url)
 			}
@@ -69,7 +69,7 @@ func TestErrorWorkflowTimeout(t *testing.T) {
 		mockAPI := mocks.NewGitHubAPIClient()
 		mockAPI.WaitForWorkflowsError = ghpkg.ErrWorkflowTimeout
 
-		_, err := mockAPI.WaitForWorkflows(1 * time.Second)
+		_, err := mockAPI.WaitForWorkflows(t.Context(), 1*time.Second)
 		if err == nil {
 			t.Error("Expected timeout error")
 		}
@@ -90,7 +90,7 @@ func TestErrorWorkflowTimeout(t *testing.T) {
 		mockAPI := mocks.NewGitHubAPIClient()
 		mockAPI.WaitForWorkflowsError = ghpkg.ErrWorkflowTimeout
 
-		_, err := mockAPI.WaitForWorkflows(1 * time.Millisecond)
+		_, err := mockAPI.WaitForWorkflows(t.Context(), 1*time.Millisecond)
 		if err == nil {
 			t.Error("Expected timeout error for very short duration")
 		}
@@ -103,7 +103,7 @@ func TestErrorPRNotFound(t *testing.T) {
 		mockAPI := mocks.NewGitHubAPIClient()
 		mockAPI.GetPullRequestByBranchError = ghpkg.ErrPRNotFound
 
-		_, err := mockAPI.GetPullRequestByBranch("nonexistent", "main")
+		_, err := mockAPI.GetPullRequestByBranch(t.Context(), "nonexistent", "main")
 		if err == nil {
 			t.Error("Expected PR not found error")
 		}
@@ -188,7 +188,7 @@ func TestErrorPRAlreadyExists(t *testing.T) {
 				mockAPI.CreatePullRequestError = errors.New(scenario.apiError)
 			}
 
-			_, err := mockAPI.CreatePullRequest("feature", "main", "Test", "Body", nil, nil, nil)
+			_, err := mockAPI.CreatePullRequest(t.Context(), "feature", "main", "Test", "Body", nil, nil, nil)
 
 			if scenario.expectMatch {
 				if !errors.Is(err, ghpkg.ErrPRAlreadyExists) {
@@ -236,7 +236,7 @@ func TestErrorPRAlreadyExistsWorkflow(t *testing.T) {
 			ghpkg.ErrPRAlreadyExists)
 		mockAPI.CreatePullRequestError = wrappedErr
 
-		_, err := mockAPI.CreatePullRequest("feature", "main", "Test", "Body", nil, nil, nil)
+		_, err := mockAPI.CreatePullRequest(t.Context(), "feature", "main", "Test", "Body", nil, nil, nil)
 		if !errors.Is(err, ghpkg.ErrPRAlreadyExists) {
 			t.Errorf("Expected ErrPRAlreadyExists on first attempt, got %v", err)
 		}
@@ -245,7 +245,7 @@ func TestErrorPRAlreadyExistsWorkflow(t *testing.T) {
 		mockAPI.GetPullRequestByBranchError = nil
 		mockAPI.GetPullRequestByBranchResponse = fixtures.ValidPullRequest()
 
-		existingPR, fetchErr := mockAPI.GetPullRequestByBranch("feature", "main")
+		existingPR, fetchErr := mockAPI.GetPullRequestByBranch(t.Context(), "feature", "main")
 		if fetchErr != nil {
 			t.Fatalf("Failed to fetch existing PR: %v", fetchErr)
 		}
@@ -265,7 +265,7 @@ func TestErrorPRAlreadyExistsWorkflow(t *testing.T) {
 			ghpkg.ErrPRAlreadyExists, originalErr)
 		mockAPI.CreatePullRequestError = wrappedErr
 
-		_, err := mockAPI.CreatePullRequest("feature-456", "develop", "Test", "Body", nil, nil, nil)
+		_, err := mockAPI.CreatePullRequest(t.Context(), "feature-456", "develop", "Test", "Body", nil, nil, nil)
 
 		// Verify typed error is detectable
 		if !errors.Is(err, ghpkg.ErrPRAlreadyExists) {
@@ -291,7 +291,7 @@ func TestErrorAPIFailures(t *testing.T) {
 		mockAPI := mocks.NewGitHubAPIClient()
 		mockAPI.ListLabelsError = errors.New("API rate limit exceeded")
 
-		_, err := mockAPI.ListLabels()
+		_, err := mockAPI.ListLabels(t.Context())
 		if err == nil {
 			t.Error("Expected API error")
 		}
@@ -304,7 +304,7 @@ func TestErrorAPIFailures(t *testing.T) {
 		mockAPI := mocks.NewGitHubAPIClient()
 		mockAPI.CreatePullRequestError = errors.New("422 Validation Failed")
 
-		_, err := mockAPI.CreatePullRequest(
+		_, err := mockAPI.CreatePullRequest(t.Context(),
 			"feature", "main", "Title", "Body", nil, nil, nil,
 		)
 		if err == nil {
@@ -316,7 +316,7 @@ func TestErrorAPIFailures(t *testing.T) {
 		mockAPI := mocks.NewGitHubAPIClient()
 		mockAPI.MergePullRequestError = errors.New("405 Method Not Allowed")
 
-		err := mockAPI.MergePullRequest(123, "squash", "Test commit")
+		err := mockAPI.MergePullRequest(t.Context(), 123, "squash", "Test commit")
 		if err == nil {
 			t.Error("Expected merge error")
 		}
@@ -326,7 +326,7 @@ func TestErrorAPIFailures(t *testing.T) {
 		mockAPI := mocks.NewGitHubAPIClient()
 		mockAPI.DeleteBranchError = errors.New("403 Forbidden")
 
-		err := mockAPI.DeleteBranch("protected-branch")
+		err := mockAPI.DeleteBranch(t.Context(), "protected-branch")
 		if err == nil {
 			t.Error("Expected delete error for protected branch")
 		}
@@ -350,7 +350,7 @@ func TestErrorNetworkFailures(t *testing.T) {
 			mockAPI := mocks.NewGitHubAPIClient()
 			mockAPI.ListLabelsError = tc.error
 
-			_, err := mockAPI.ListLabels()
+			_, err := mockAPI.ListLabels(t.Context())
 			if err == nil {
 				t.Errorf("Expected network error for %s", tc.name)
 			}
@@ -383,7 +383,7 @@ func TestErrorHTTPStatusCodes(t *testing.T) {
 			mockAPI := mocks.NewGitHubAPIClient()
 			mockAPI.SetRepositoryFromURLError = errors.New(tc.message)
 
-			err := mockAPI.SetRepositoryFromURL("https://github.com/owner/repo")
+			err := mockAPI.SetRepositoryFromURL(t.Context(), "https://github.com/owner/repo")
 			if err == nil {
 				t.Errorf("Expected error for status code %d", tc.code)
 			}
@@ -401,7 +401,7 @@ func TestErrorRateLimiting(t *testing.T) {
 		rateLimitErr := errors.New("403 API rate limit exceeded")
 		mockAPI.ListLabelsError = rateLimitErr
 
-		_, err := mockAPI.ListLabels()
+		_, err := mockAPI.ListLabels(t.Context())
 		if err == nil {
 			t.Error("Expected rate limit error")
 		}
@@ -415,7 +415,7 @@ func TestErrorRateLimiting(t *testing.T) {
 		tooManyErr := errors.New("429 Too Many Requests")
 		mockAPI.CreatePullRequestError = tooManyErr
 
-		_, err := mockAPI.CreatePullRequest(
+		_, err := mockAPI.CreatePullRequest(t.Context(),
 			"feature", "main", "Title", "Body", nil, nil, nil,
 		)
 		if err == nil {
@@ -430,7 +430,7 @@ func TestErrorAuthenticationFailures(t *testing.T) {
 		mockAPI := mocks.NewGitHubAPIClient()
 		mockAPI.SetRepositoryFromURLError = errors.New("401 Bad credentials")
 
-		err := mockAPI.SetRepositoryFromURL("https://github.com/owner/repo")
+		err := mockAPI.SetRepositoryFromURL(t.Context(), "https://github.com/owner/repo")
 		if err == nil {
 			t.Error("Expected authentication error")
 		}
@@ -440,7 +440,7 @@ func TestErrorAuthenticationFailures(t *testing.T) {
 		mockAPI := mocks.NewGitHubAPIClient()
 		mockAPI.ListLabelsError = errors.New("401 Token expired")
 
-		_, err := mockAPI.ListLabels()
+		_, err := mockAPI.ListLabels(t.Context())
 		if err == nil {
 			t.Error("Expected expired token error")
 		}
@@ -450,7 +450,7 @@ func TestErrorAuthenticationFailures(t *testing.T) {
 		mockAPI := mocks.NewGitHubAPIClient()
 		mockAPI.MergePullRequestError = errors.New("403 Resource not accessible by integration")
 
-		err := mockAPI.MergePullRequest(123, "squash", "Test commit")
+		err := mockAPI.MergePullRequest(t.Context(), 123, "squash", "Test commit")
 		if err == nil {
 			t.Error("Expected insufficient permissions error")
 		}
@@ -463,7 +463,7 @@ func TestErrorMalformedResponses(t *testing.T) {
 		mockAPI := mocks.NewGitHubAPIClient()
 		mockAPI.ListLabelsError = errors.New("invalid character '<' looking for beginning of value")
 
-		_, err := mockAPI.ListLabels()
+		_, err := mockAPI.ListLabels(t.Context())
 		if err == nil {
 			t.Error("Expected JSON parsing error")
 		}
@@ -473,7 +473,7 @@ func TestErrorMalformedResponses(t *testing.T) {
 		mockAPI := mocks.NewGitHubAPIClient()
 		mockAPI.GetPullRequestByBranchError = errors.New("unexpected response format")
 
-		_, err := mockAPI.GetPullRequestByBranch("feature", "main")
+		_, err := mockAPI.GetPullRequestByBranch(t.Context(), "feature", "main")
 		if err == nil {
 			t.Error("Expected format error")
 		}
@@ -486,7 +486,7 @@ func TestErrorResourceNotFound(t *testing.T) {
 		mockAPI := mocks.NewGitHubAPIClient()
 		mockAPI.SetRepositoryFromURLError = errors.New("404 Not Found")
 
-		err := mockAPI.SetRepositoryFromURL("https://github.com/owner/nonexistent")
+		err := mockAPI.SetRepositoryFromURL(t.Context(), "https://github.com/owner/nonexistent")
 		if err == nil {
 			t.Error("Expected repository not found error")
 		}
@@ -496,7 +496,7 @@ func TestErrorResourceNotFound(t *testing.T) {
 		mockAPI := mocks.NewGitHubAPIClient()
 		mockAPI.DeleteBranchError = errors.New("422 Reference does not exist")
 
-		err := mockAPI.DeleteBranch("nonexistent-branch")
+		err := mockAPI.DeleteBranch(t.Context(), "nonexistent-branch")
 		if err == nil {
 			t.Error("Expected branch not found error")
 		}
@@ -506,7 +506,7 @@ func TestErrorResourceNotFound(t *testing.T) {
 		mockAPI := mocks.NewGitHubAPIClient()
 		mockAPI.GetPullRequestByBranchError = ghpkg.ErrPRNotFound
 
-		_, err := mockAPI.GetPullRequestByBranch("feature", "main")
+		_, err := mockAPI.GetPullRequestByBranch(t.Context(), "feature", "main")
 		if err == nil {
 			t.Error("Expected PR not found error")
 		}
@@ -530,7 +530,7 @@ func TestErrorServiceOutages(t *testing.T) {
 			mockAPI := mocks.NewGitHubAPIClient()
 			mockAPI.WaitForWorkflowsError = tc.error
 
-			_, err := mockAPI.WaitForWorkflows(5 * time.Minute)
+			_, err := mockAPI.WaitForWorkflows(t.Context(), 5*time.Minute)
 			if err == nil {
 				t.Errorf("Expected service outage error for %s", tc.name)
 			}
@@ -547,7 +547,7 @@ func TestErrorValidationFailures(t *testing.T) {
 		mockAPI := mocks.NewGitHubAPIClient()
 		mockAPI.CreatePullRequestError = errors.New("422 Validation Failed: title can't be blank")
 
-		_, err := mockAPI.CreatePullRequest(
+		_, err := mockAPI.CreatePullRequest(t.Context(),
 			"feature", "main", "", "Body", nil, nil, nil,
 		)
 		if err == nil {
@@ -559,7 +559,7 @@ func TestErrorValidationFailures(t *testing.T) {
 		mockAPI := mocks.NewGitHubAPIClient()
 		mockAPI.CreatePullRequestError = errors.New("422 Validation Failed: head ref is invalid")
 
-		_, err := mockAPI.CreatePullRequest(
+		_, err := mockAPI.CreatePullRequest(t.Context(),
 			"", "main", "Title", "Body", nil, nil, nil,
 		)
 		if err == nil {
@@ -571,7 +571,7 @@ func TestErrorValidationFailures(t *testing.T) {
 		mockAPI := mocks.NewGitHubAPIClient()
 		mockAPI.CreatePullRequestError = errors.New("422 Validation Failed: head and base must be different")
 
-		_, err := mockAPI.CreatePullRequest(
+		_, err := mockAPI.CreatePullRequest(t.Context(),
 			"main", "main", "Title", "Body", nil, nil, nil,
 		)
 		if err == nil {
@@ -587,7 +587,7 @@ func TestErrorPropagation(t *testing.T) {
 		originalErr := errors.New("original error")
 		mockAPI.SetRepositoryFromURLError = originalErr
 
-		err := mockAPI.SetRepositoryFromURL("https://github.com/owner/repo")
+		err := mockAPI.SetRepositoryFromURL(t.Context(), "https://github.com/owner/repo")
 		if err == nil {
 			t.Error("Expected error to propagate")
 		}
@@ -601,7 +601,7 @@ func TestErrorPropagation(t *testing.T) {
 		contextErr := fmt.Errorf("failed to create PR: %w", ghpkg.ErrInvalidURLFormat)
 		mockAPI.CreatePullRequestError = contextErr
 
-		_, err := mockAPI.CreatePullRequest(
+		_, err := mockAPI.CreatePullRequest(t.Context(),
 			"feature", "main", "Title", "Body", nil, nil, nil,
 		)
 		if err == nil {
@@ -621,7 +621,7 @@ func TestErrorRecovery(t *testing.T) {
 
 		// First attempt fails
 		mockAPI.ListLabelsError = errors.New("503 Service Unavailable")
-		_, err := mockAPI.ListLabels()
+		_, err := mockAPI.ListLabels(t.Context())
 		if err == nil {
 			t.Error("Expected first attempt to fail")
 		}
@@ -629,7 +629,7 @@ func TestErrorRecovery(t *testing.T) {
 		// Second attempt succeeds
 		mockAPI.ListLabelsError = nil
 		mockAPI.ListLabelsResponse = []*ghpkg.Label{{Name: "bug"}}
-		labels, err := mockAPI.ListLabels()
+		labels, err := mockAPI.ListLabels(t.Context())
 		if err != nil {
 			t.Fatalf("Expected retry to succeed: %v", err)
 		}
@@ -643,7 +643,7 @@ func TestErrorRecovery(t *testing.T) {
 
 		// Can still proceed if non-critical operations fail
 		mockAPI.DeleteBranchError = errors.New("403 Forbidden")
-		err := mockAPI.DeleteBranch("feature")
+		err := mockAPI.DeleteBranch(t.Context(), "feature")
 		if err == nil {
 			t.Error("Expected delete to fail")
 		}

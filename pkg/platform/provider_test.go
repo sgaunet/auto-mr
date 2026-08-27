@@ -17,7 +17,7 @@ import (
 func TestMockProvider_Initialize(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		mock := mocks.NewPlatformProvider()
-		err := mock.Initialize("https://github.com/owner/repo.git")
+		err := mock.Initialize(t.Context(), "https://github.com/owner/repo.git")
 		require.NoError(t, err)
 		assert.Equal(t, 1, mock.GetCallCount("Initialize"))
 	})
@@ -25,7 +25,7 @@ func TestMockProvider_Initialize(t *testing.T) {
 	t.Run("error", func(t *testing.T) {
 		mock := mocks.NewPlatformProvider()
 		mock.InitializeError = errors.New("init failed")
-		err := mock.Initialize("https://github.com/owner/repo.git")
+		err := mock.Initialize(t.Context(), "https://github.com/owner/repo.git")
 		require.Error(t, err)
 		assert.Equal(t, "init failed", err.Error())
 	})
@@ -36,7 +36,7 @@ func TestMockProvider_ListLabels(t *testing.T) {
 		mock := mocks.NewPlatformProvider()
 		mock.ListLabelsResponse = fixtures.ValidPlatformLabels()
 
-		labels, err := mock.ListLabels()
+		labels, err := mock.ListLabels(t.Context())
 		require.NoError(t, err)
 		assert.Len(t, labels, 4)
 		assert.Equal(t, "bug", labels[0].Name)
@@ -46,7 +46,7 @@ func TestMockProvider_ListLabels(t *testing.T) {
 		mock := mocks.NewPlatformProvider()
 		mock.ListLabelsResponse = []platform.Label{}
 
-		labels, err := mock.ListLabels()
+		labels, err := mock.ListLabels(t.Context())
 		require.NoError(t, err)
 		assert.Empty(t, labels)
 	})
@@ -55,7 +55,7 @@ func TestMockProvider_ListLabels(t *testing.T) {
 		mock := mocks.NewPlatformProvider()
 		mock.ListLabelsError = errors.New("api error")
 
-		labels, err := mock.ListLabels()
+		labels, err := mock.ListLabels(t.Context())
 		require.Error(t, err)
 		assert.Nil(t, labels)
 	})
@@ -67,7 +67,7 @@ func TestMockProvider_Create(t *testing.T) {
 		mock.CreateResponse = fixtures.ValidPlatformMergeRequest()
 		params := fixtures.ValidCreateParams()
 
-		mr, err := mock.Create(params)
+		mr, err := mock.Create(t.Context(), params)
 		require.NoError(t, err)
 		require.NotNil(t, mr)
 		assert.Equal(t, int64(42), mr.ID)
@@ -83,7 +83,7 @@ func TestMockProvider_Create(t *testing.T) {
 		mock := mocks.NewPlatformProvider()
 		mock.CreateError = platform.ErrAlreadyExists
 
-		mr, err := mock.Create(fixtures.ValidCreateParams())
+		mr, err := mock.Create(t.Context(), fixtures.ValidCreateParams())
 		require.Error(t, err)
 		assert.Nil(t, mr)
 		assert.True(t, errors.Is(err, platform.ErrAlreadyExists))
@@ -95,7 +95,7 @@ func TestMockProvider_GetByBranch(t *testing.T) {
 		mock := mocks.NewPlatformProvider()
 		mock.GetByBranchResponse = fixtures.ValidPlatformMergeRequest()
 
-		mr, err := mock.GetByBranch("feature", "main")
+		mr, err := mock.GetByBranch(t.Context(), "feature", "main")
 		require.NoError(t, err)
 		require.NotNil(t, mr)
 		assert.Equal(t, int64(42), mr.ID)
@@ -105,7 +105,7 @@ func TestMockProvider_GetByBranch(t *testing.T) {
 		mock := mocks.NewPlatformProvider()
 		mock.GetByBranchError = platform.ErrNotFound
 
-		mr, err := mock.GetByBranch("feature", "main")
+		mr, err := mock.GetByBranch(t.Context(), "feature", "main")
 		require.Error(t, err)
 		assert.Nil(t, mr)
 		assert.True(t, errors.Is(err, platform.ErrNotFound))
@@ -117,7 +117,7 @@ func TestMockProvider_WaitForPipeline(t *testing.T) {
 		mock := mocks.NewPlatformProvider()
 		mock.WaitForPipelineStatus = "success"
 
-		status, err := mock.WaitForPipeline(30 * time.Minute)
+		status, err := mock.WaitForPipeline(t.Context(), 30*time.Minute)
 		require.NoError(t, err)
 		assert.Equal(t, "success", status)
 	})
@@ -126,7 +126,7 @@ func TestMockProvider_WaitForPipeline(t *testing.T) {
 		mock := mocks.NewPlatformProvider()
 		mock.WaitForPipelineStatus = "failed"
 
-		status, err := mock.WaitForPipeline(30 * time.Minute)
+		status, err := mock.WaitForPipeline(t.Context(), 30*time.Minute)
 		require.NoError(t, err)
 		assert.Equal(t, "failed", status)
 	})
@@ -135,7 +135,7 @@ func TestMockProvider_WaitForPipeline(t *testing.T) {
 		mock := mocks.NewPlatformProvider()
 		mock.WaitForPipelineError = errors.New("timeout")
 
-		_, err := mock.WaitForPipeline(30 * time.Minute)
+		_, err := mock.WaitForPipeline(t.Context(), 30*time.Minute)
 		require.Error(t, err)
 	})
 }
@@ -143,7 +143,7 @@ func TestMockProvider_WaitForPipeline(t *testing.T) {
 func TestMockProvider_Approve(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		mock := mocks.NewPlatformProvider()
-		err := mock.Approve(42)
+		err := mock.Approve(t.Context(), 42)
 		require.NoError(t, err)
 		assert.Equal(t, 1, mock.GetCallCount("Approve"))
 	})
@@ -151,7 +151,7 @@ func TestMockProvider_Approve(t *testing.T) {
 	t.Run("error", func(t *testing.T) {
 		mock := mocks.NewPlatformProvider()
 		mock.ApproveError = errors.New("approval failed")
-		err := mock.Approve(42)
+		err := mock.Approve(t.Context(), 42)
 		require.Error(t, err)
 	})
 }
@@ -161,7 +161,7 @@ func TestMockProvider_Merge(t *testing.T) {
 		mock := mocks.NewPlatformProvider()
 		params := fixtures.ValidMergeParams()
 
-		err := mock.Merge(params)
+		err := mock.Merge(t.Context(), params)
 		require.NoError(t, err)
 
 		lastCall := mock.GetLastCall("Merge")
@@ -173,7 +173,7 @@ func TestMockProvider_Merge(t *testing.T) {
 	t.Run("error", func(t *testing.T) {
 		mock := mocks.NewPlatformProvider()
 		mock.MergeError = errors.New("merge failed")
-		err := mock.Merge(fixtures.ValidMergeParams())
+		err := mock.Merge(t.Context(), fixtures.ValidMergeParams())
 		require.Error(t, err)
 	})
 }
@@ -199,9 +199,9 @@ func TestMockProvider_CallTracking(t *testing.T) {
 		mock := mocks.NewPlatformProvider()
 		mock.ListLabelsResponse = []platform.Label{}
 
-		_, _ = mock.ListLabels()
-		_, _ = mock.ListLabels()
-		_ = mock.Initialize("url")
+		_, _ = mock.ListLabels(t.Context())
+		_, _ = mock.ListLabels(t.Context())
+		_ = mock.Initialize(t.Context(), "url")
 
 		assert.Equal(t, 2, mock.GetCallCount("ListLabels"))
 		assert.Equal(t, 1, mock.GetCallCount("Initialize"))
@@ -210,7 +210,7 @@ func TestMockProvider_CallTracking(t *testing.T) {
 
 	t.Run("reset clears calls", func(t *testing.T) {
 		mock := mocks.NewPlatformProvider()
-		_ = mock.Initialize("url")
+		_ = mock.Initialize(t.Context(), "url")
 		assert.Equal(t, 1, mock.GetCallCount("Initialize"))
 
 		mock.Reset()
@@ -289,30 +289,30 @@ func TestWorkflow_CreateWaitMerge(t *testing.T) {
 		mock.PlatformNameValue = "GitHub"
 
 		// Initialize
-		err := mock.Initialize("https://github.com/owner/repo.git")
+		err := mock.Initialize(t.Context(), "https://github.com/owner/repo.git")
 		require.NoError(t, err)
 
 		// List labels
-		labels, err := mock.ListLabels()
+		labels, err := mock.ListLabels(t.Context())
 		require.NoError(t, err)
 		assert.NotEmpty(t, labels)
 
 		// Create
-		mr, err := mock.Create(fixtures.ValidCreateParams())
+		mr, err := mock.Create(t.Context(), fixtures.ValidCreateParams())
 		require.NoError(t, err)
 		require.NotNil(t, mr)
 
 		// Wait
-		status, err := mock.WaitForPipeline(30 * time.Minute)
+		status, err := mock.WaitForPipeline(t.Context(), 30*time.Minute)
 		require.NoError(t, err)
 		assert.Equal(t, "success", status)
 
 		// Approve (no-op for GitHub)
-		err = mock.Approve(mr.ID)
+		err = mock.Approve(t.Context(), mr.ID)
 		require.NoError(t, err)
 
 		// Merge
-		err = mock.Merge(platform.MergeParams{
+		err = mock.Merge(t.Context(), platform.MergeParams{
 			MRID:         mr.ID,
 			Squash:       true,
 			CommitTitle:  "Test merge",
@@ -338,12 +338,12 @@ func TestWorkflow_CreateWaitMerge(t *testing.T) {
 		mock.WaitForPipelineStatus = "success"
 
 		// Create fails with already exists
-		_, err := mock.Create(fixtures.ValidCreateParams())
+		_, err := mock.Create(t.Context(), fixtures.ValidCreateParams())
 		require.Error(t, err)
 		assert.True(t, errors.Is(err, platform.ErrAlreadyExists))
 
 		// Fall back to GetByBranch
-		mr, err := mock.GetByBranch("feature-branch", "main")
+		mr, err := mock.GetByBranch(t.Context(), "feature-branch", "main")
 		require.NoError(t, err)
 		require.NotNil(t, mr)
 		assert.Equal(t, int64(42), mr.ID)
@@ -354,11 +354,11 @@ func TestWorkflow_CreateWaitMerge(t *testing.T) {
 		mock.CreateResponse = fixtures.ValidPlatformMergeRequest()
 		mock.WaitForPipelineStatus = "failed"
 
-		mr, err := mock.Create(fixtures.ValidCreateParams())
+		mr, err := mock.Create(t.Context(), fixtures.ValidCreateParams())
 		require.NoError(t, err)
 		require.NotNil(t, mr)
 
-		status, err := mock.WaitForPipeline(30 * time.Minute)
+		status, err := mock.WaitForPipeline(t.Context(), 30*time.Minute)
 		require.NoError(t, err)
 		assert.Equal(t, "failed", status)
 	})
@@ -380,7 +380,7 @@ func TestGitHubAdapter_ApproveIsNoOp(t *testing.T) {
 	// Verify that the GitHub adapter pattern (approve as no-op) works via mock
 	mock := mocks.NewPlatformProvider()
 	// No error configured = no-op behavior
-	err := mock.Approve(42)
+	err := mock.Approve(t.Context(), 42)
 	require.NoError(t, err)
 	assert.Equal(t, 1, mock.GetCallCount("Approve"))
 }
@@ -396,7 +396,7 @@ func TestGitHubAdapter_MergeWithBranchDeletion(t *testing.T) {
 		SourceBranch: "feature-branch",
 	}
 
-	err := mock.Merge(params)
+	err := mock.Merge(t.Context(), params)
 	require.NoError(t, err)
 
 	lastCall := mock.GetLastCall("Merge")
@@ -417,7 +417,7 @@ func TestForgejoAdapter_ApproveIsNoOp(t *testing.T) {
 	// Forgejo, like GitHub, does not gate merges on approval; Approve must return nil
 	mock := mocks.NewPlatformProvider()
 	// No ApproveError configured — models the no-op behaviour of ForgejoAdapter.Approve
-	err := mock.Approve(42)
+	err := mock.Approve(t.Context(), 42)
 	require.NoError(t, err)
 	assert.Equal(t, 1, mock.GetCallCount("Approve"))
 }
@@ -434,7 +434,7 @@ func TestForgejoAdapter_MergeWithBranchDeletion(t *testing.T) {
 		SourceBranch: "forgejo-feature",
 	}
 
-	err := mock.Merge(params)
+	err := mock.Merge(t.Context(), params)
 	require.NoError(t, err)
 
 	lastCall := mock.GetLastCall("Merge")

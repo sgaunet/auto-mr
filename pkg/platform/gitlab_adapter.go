@@ -1,6 +1,7 @@
 package platform
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"time"
@@ -26,16 +27,16 @@ func NewGitLabAdapter(client *gitlab.Client, cfg config.GitLabConfig, _ *bullets
 }
 
 // Initialize sets up the GitLab project from a remote URL.
-func (a *GitLabAdapter) Initialize(remoteURL string) error {
-	if err := a.client.SetProjectFromURL(remoteURL); err != nil {
+func (a *GitLabAdapter) Initialize(ctx context.Context, remoteURL string) error {
+	if err := a.client.SetProjectFromURL(ctx, remoteURL); err != nil {
 		return fmt.Errorf("failed to set GitLab project: %w", err)
 	}
 	return nil
 }
 
 // ListLabels returns all available labels, converted to platform-agnostic format.
-func (a *GitLabAdapter) ListLabels() ([]Label, error) {
-	glLabels, err := a.client.ListLabels()
+func (a *GitLabAdapter) ListLabels(ctx context.Context) ([]Label, error) {
+	glLabels, err := a.client.ListLabels(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list GitLab labels: %w", err)
 	}
@@ -48,8 +49,8 @@ func (a *GitLabAdapter) ListLabels() ([]Label, error) {
 }
 
 // Create creates a new merge request on GitLab.
-func (a *GitLabAdapter) Create(params CreateParams) (*MergeRequest, error) {
-	mr, err := a.client.CreateMergeRequest(
+func (a *GitLabAdapter) Create(ctx context.Context, params CreateParams) (*MergeRequest, error) {
+	mr, err := a.client.CreateMergeRequest(ctx,
 		params.SourceBranch, params.TargetBranch,
 		params.Title, params.Body,
 		a.cfg.Assignee, a.cfg.Reviewer,
@@ -70,8 +71,8 @@ func (a *GitLabAdapter) Create(params CreateParams) (*MergeRequest, error) {
 }
 
 // GetByBranch fetches an existing merge request by source and target branches.
-func (a *GitLabAdapter) GetByBranch(sourceBranch, targetBranch string) (*MergeRequest, error) {
-	mr, err := a.client.GetMergeRequestByBranch(sourceBranch, targetBranch)
+func (a *GitLabAdapter) GetByBranch(ctx context.Context, sourceBranch, targetBranch string) (*MergeRequest, error) {
+	mr, err := a.client.GetMergeRequestByBranch(ctx, sourceBranch, targetBranch)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get merge request by branch: %w", err)
 	}
@@ -84,8 +85,8 @@ func (a *GitLabAdapter) GetByBranch(sourceBranch, targetBranch string) (*MergeRe
 }
 
 // WaitForPipeline waits for GitLab pipeline completion.
-func (a *GitLabAdapter) WaitForPipeline(timeout time.Duration) (string, error) {
-	status, err := a.client.WaitForPipeline(timeout)
+func (a *GitLabAdapter) WaitForPipeline(ctx context.Context, timeout time.Duration) (string, error) {
+	status, err := a.client.WaitForPipeline(ctx, timeout)
 	if err != nil {
 		return "", fmt.Errorf("failed to wait for GitLab pipeline: %w", err)
 	}
@@ -93,8 +94,8 @@ func (a *GitLabAdapter) WaitForPipeline(timeout time.Duration) (string, error) {
 }
 
 // Approve approves a GitLab merge request.
-func (a *GitLabAdapter) Approve(mrID int64) error {
-	if err := a.client.ApproveMergeRequest(mrID); err != nil {
+func (a *GitLabAdapter) Approve(ctx context.Context, mrID int64) error {
+	if err := a.client.ApproveMergeRequest(ctx, mrID); err != nil {
 		return fmt.Errorf("failed to approve merge request: %w", err)
 	}
 	return nil
@@ -102,8 +103,8 @@ func (a *GitLabAdapter) Approve(mrID int64) error {
 
 // Merge merges a GitLab merge request.
 // Branch deletion is handled by GitLab's RemoveSourceBranch flag set during creation.
-func (a *GitLabAdapter) Merge(params MergeParams) error {
-	if err := a.client.MergeMergeRequest(params.MRID, params.Squash, params.CommitTitle); err != nil {
+func (a *GitLabAdapter) Merge(ctx context.Context, params MergeParams) error {
+	if err := a.client.MergeMergeRequest(ctx, params.MRID, params.Squash, params.CommitTitle); err != nil {
 		return fmt.Errorf("failed to merge MR: %w", err)
 	}
 	return nil

@@ -9,12 +9,25 @@ import (
 )
 
 // newCheckTracker creates a new check tracker with initialized maps.
-func newCheckTracker() *checkTracker {
+// The tracker owns a context derived from ctx, which scopes both the spinner
+// animations it creates and its own refresh goroutines. Callers must call [Stop] when
+// the wait ends, including on error: a check left in a running state would otherwise
+// keep its goroutine ticking, since those loops exit only when the check data reaches
+// a terminal state.
+func newCheckTracker(ctx context.Context) *checkTracker {
+	ctx, cancel := context.WithCancel(ctx)
 	return &checkTracker{
+		ctx:      ctx,
+		cancel:   cancel,
 		checks:   make(map[int64]*JobInfo),
 		handles:  make(map[int64]*bullets.BulletHandle),
 		spinners: make(map[int64]*bullets.Spinner),
 	}
+}
+
+// Stop tears down the tracker's spinners and refresh goroutines.
+func (ct *checkTracker) Stop() {
+	ct.cancel()
 }
 
 // getCheck retrieves a job/check by ID with read lock.
@@ -117,7 +130,7 @@ func (ct *checkTracker) handleNewCheck(newCheck *JobInfo, logger *bullets.Updata
 	statusText := formatJobStatus(newCheck)
 
 	if newCheck.Status == statusInProgress || newCheck.Status == statusQueued {
-		spinner := logger.SpinnerCircle(context.Background(), statusText)
+		spinner := logger.SpinnerCircle(ct.ctx, statusText)
 		ct.setSpinner(newCheck.ID, spinner)
 		// Start time update loop for any check with spinner that has started timing
 		if newCheck.StartedAt != nil {
@@ -259,7 +272,7 @@ func (ct *checkTracker) transitionCheckToRunning(logger *bullets.UpdatableLogger
 	}
 
 	// Create new animated spinner (only if doesn't exist)
-	spinner := logger.SpinnerCircle(context.Background(), statusText)
+	spinner := logger.SpinnerCircle(ct.ctx, statusText)
 	ct.setSpinner(checkID, spinner)
 
 	// Start time update loop for this spinner
@@ -300,7 +313,13 @@ func (ct *checkTracker) updateSpinnerLoop(checkID int64, spinner *bullets.Spinne
 	ticker := time.NewTicker(spinnerUpdateInterval)
 	defer ticker.Stop()
 
-	for range ticker.C {
+	for {
+		select {
+		case <-ct.ctx.Done():
+			return
+		case <-ticker.C:
+		}
+
 		check, exists := ct.getCheck(checkID)
 
 		// Stop if check no longer exists

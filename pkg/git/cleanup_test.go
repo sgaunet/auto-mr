@@ -142,8 +142,8 @@ func TestCleanupReport_FirstError(t *testing.T) {
 		{
 			name: "pull_error_when_no_switch_error",
 			report: &git.CleanupReport{
-				PullError:  errPull,
-				PruneError: errPrune,
+				PullError:   errPull,
+				PruneError:  errPrune,
 				DeleteError: errDelete,
 			},
 			expectError: errPull,
@@ -199,9 +199,9 @@ func TestCleanupReport_Metadata(t *testing.T) {
 // TestCleanupReport_ErrorMessages verifies error messages include recovery instructions.
 func TestCleanupReport_ErrorMessages(t *testing.T) {
 	tests := []struct {
-		name          string
-		errorField    string
-		expectedText  string
+		name         string
+		errorField   string
+		expectedText string
 	}{
 		{
 			name:         "switch_error_contains_recovery_instructions",
