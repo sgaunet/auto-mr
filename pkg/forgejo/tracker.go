@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"code.gitea.io/sdk/gitea"
+	"github.com/sgaunet/auto-mr/internal/trackmap"
 	"github.com/sgaunet/bullets"
 )
 
@@ -20,9 +21,9 @@ func newStatusTracker(ctx context.Context) *statusTracker {
 	return &statusTracker{
 		ctx:      ctx,
 		cancel:   cancel,
-		entries:  make(map[string]*statusEntry),
-		handles:  make(map[string]*bullets.BulletHandle),
-		spinners: make(map[string]*bullets.Spinner),
+		entries:  trackmap.New[string, *statusEntry](),
+		handles:  trackmap.New[string, *bullets.BulletHandle](),
+		spinners: trackmap.New[string, *bullets.Spinner](),
 	}
 }
 
@@ -33,63 +34,39 @@ func (st *statusTracker) Stop() {
 
 // getEntry retrieves a status entry by context name with read lock.
 func (st *statusTracker) getEntry(statusCtx string) (*statusEntry, bool) {
-	st.mu.RLock()
-	defer st.mu.RUnlock()
-
-	entry, exists := st.entries[statusCtx]
-	return entry, exists
+	return st.entries.Get(statusCtx)
 }
 
 // setEntry stores a status entry by context name with write lock.
 func (st *statusTracker) setEntry(statusCtx string, entry *statusEntry) {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-
-	st.entries[statusCtx] = entry
+	st.entries.Set(statusCtx, entry)
 }
 
 // getHandle retrieves a bullet handle by context name with read lock.
 func (st *statusTracker) getHandle(statusCtx string) (*bullets.BulletHandle, bool) {
-	st.mu.RLock()
-	defer st.mu.RUnlock()
-
-	handle, exists := st.handles[statusCtx]
-	return handle, exists
+	return st.handles.Get(statusCtx)
 }
 
 // setHandle stores a bullet handle for a context name with write lock.
 func (st *statusTracker) setHandle(statusCtx string, handle *bullets.BulletHandle) {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-
-	st.handles[statusCtx] = handle
+	st.handles.Set(statusCtx, handle)
 }
 
 // getSpinner retrieves a spinner by context name with read lock.
 func (st *statusTracker) getSpinner(statusCtx string) (*bullets.Spinner, bool) {
-	st.mu.RLock()
-	defer st.mu.RUnlock()
-
-	spinner, exists := st.spinners[statusCtx]
-	return spinner, exists
+	return st.spinners.Get(statusCtx)
 }
 
 // setSpinner stores a spinner for a context name with write lock.
 func (st *statusTracker) setSpinner(statusCtx string, spinner *bullets.Spinner) {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-
-	st.spinners[statusCtx] = spinner
+	st.spinners.Set(statusCtx, spinner)
 }
 
 // deleteSpinner removes a spinner with write lock, stopping its animation first.
 func (st *statusTracker) deleteSpinner(statusCtx string) {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-
-	if spinner, exists := st.spinners[statusCtx]; exists {
+	if spinner, exists := st.spinners.Get(statusCtx); exists {
 		spinner.Stop()
-		delete(st.spinners, statusCtx)
+		st.spinners.Delete(statusCtx)
 	}
 }
 

@@ -2,10 +2,10 @@ package github
 
 import (
 	"context"
-	"sync"
 	"time"
 
 	"github.com/google/go-github/v69/github"
+	"github.com/sgaunet/auto-mr/internal/trackmap"
 	"github.com/sgaunet/bullets"
 )
 
@@ -68,8 +68,7 @@ type checkTracker struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	mu       sync.RWMutex
-	checks   map[int64]*JobInfo
-	handles  map[int64]*bullets.BulletHandle
-	spinners map[int64]*bullets.Spinner // Spinners for running jobs
+	checks   *trackmap.Map[int64, *JobInfo]
+	handles  *trackmap.Map[int64, *bullets.BulletHandle]
+	spinners *trackmap.Map[int64, *bullets.Spinner] // Spinners for running jobs
 }

@@ -23,6 +23,7 @@ Platform detection is driven by matching the git remote URL against the configur
 | `pkg/platform/` | Platform adapter abstraction (`Provider` interface + per-platform adapters) |
 | `internal/logger/` | Structured logging via `log/slog` |
 | `internal/polling/` | Poll cadence, per-request bounds, transient-failure classification |
+| `internal/trackmap/` | Mutex-guarded map shared by the CI trackers |
 | `internal/urlutil/` | Git remote URL parsing (host and path components) |
 | `internal/labels/` | Label selection helpers |
 | `internal/security/` | Token sanitization and secure error wrapping |

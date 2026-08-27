@@ -2,10 +2,10 @@ package forgejo
 
 import (
 	"context"
-	"sync"
 	"time"
 
 	"code.gitea.io/sdk/gitea"
+	"github.com/sgaunet/auto-mr/internal/trackmap"
 	"github.com/sgaunet/bullets"
 )
 
@@ -66,8 +66,7 @@ type statusTracker struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	mu       sync.RWMutex
-	entries  map[string]*statusEntry
-	handles  map[string]*bullets.BulletHandle
-	spinners map[string]*bullets.Spinner
+	entries  *trackmap.Map[string, *statusEntry]
+	handles  *trackmap.Map[string, *bullets.BulletHandle]
+	spinners *trackmap.Map[string, *bullets.Spinner]
 }

@@ -2,9 +2,9 @@ package gitlab
 
 import (
 	"context"
-	"sync"
 	"time"
 
+	"github.com/sgaunet/auto-mr/internal/trackmap"
 	"github.com/sgaunet/bullets"
 	gitlab "gitlab.com/gitlab-org/api/client-go"
 )
@@ -68,8 +68,7 @@ type jobTracker struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	mu       sync.RWMutex
-	jobs     map[int64]*Job
-	handles  map[int64]*bullets.BulletHandle
-	spinners map[int64]*bullets.Spinner
+	jobs     *trackmap.Map[int64, *Job]
+	handles  *trackmap.Map[int64, *bullets.BulletHandle]
+	spinners *trackmap.Map[int64, *bullets.Spinner]
 }
