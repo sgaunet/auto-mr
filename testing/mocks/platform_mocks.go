@@ -58,7 +58,7 @@ func (m *PlatformProvider) Create(_ context.Context, params platform.CreateParam
 		argSourceBranch: params.SourceBranch,
 		argTargetBranch: params.TargetBranch,
 		argTitle:        params.Title,
-		"body":          params.Body,
+		argBody:         params.Body,
 		argLabels:       params.Labels,
 		argSquash:       params.Squash,
 	})

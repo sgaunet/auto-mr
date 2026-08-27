@@ -43,6 +43,9 @@ type MethodCall struct {
 // Argument keys used in tracked MethodCall.Args maps, shared across mock clients.
 const (
 	argHead         = "head"
+	argBase         = "base"
+	argURL          = "url"
+	argBody         = "body"
 	argTitle        = "title"
 	argLabels       = "labels"
 	argTimeout      = "timeout"
@@ -62,7 +65,7 @@ func NewGitHubAPIClient() *GitHubAPIClient {
 // SetRepositoryFromURL implements github.APIClient.
 func (m *GitHubAPIClient) SetRepositoryFromURL(_ context.Context, url string) error {
 	m.trackCall("SetRepositoryFromURL", map[string]any{
-		"url": url,
+		argURL: url,
 	})
 	return m.SetRepositoryFromURLError
 }
@@ -83,7 +86,7 @@ func (m *GitHubAPIClient) CreatePullRequest(
 		argHead:     head,
 		"base":      base,
 		argTitle:    title,
-		"body":      body,
+		argBody:     body,
 		"assignees": assignees,
 		"reviewers": reviewers,
 		argLabels:   labels,

@@ -673,12 +673,19 @@ func (c *Client) fetchPipelineJobs(ctx context.Context, pipelineID int64) ([]*Jo
 
 		// Convert GitLab jobs to our Job struct
 		for _, glJob := range jobs {
+			// created_at is optional in the API response; dereferencing it blindly
+			// crashes the run on a job that has not been created yet.
+			var createdAt time.Time
+			if glJob.CreatedAt != nil {
+				createdAt = *glJob.CreatedAt
+			}
+
 			job := &Job{
 				ID:         glJob.ID,
 				Name:       glJob.Name,
 				Status:     glJob.Status,
 				Stage:      glJob.Stage,
-				CreatedAt:  *glJob.CreatedAt,
+				CreatedAt:  createdAt,
 				StartedAt:  glJob.StartedAt,
 				FinishedAt: glJob.FinishedAt,
 				Duration:   glJob.Duration,

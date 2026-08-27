@@ -124,7 +124,7 @@ func (c *Client) CreatePullRequest(
 
 	// Add assignees if provided
 	if len(assignees) > 0 {
-		_, _, err = c.client.Issues.AddAssignees(ctx, c.owner, c.repo, *pr.Number, assignees)
+		_, _, err = c.client.Issues.AddAssignees(ctx, c.owner, c.repo, pr.GetNumber(), assignees)
 		if err != nil {
 			return nil, fmt.Errorf("failed to add assignees: %w", err)
 		}
@@ -139,15 +139,18 @@ func (c *Client) CreatePullRequest(
 
 	// Add labels if provided
 	if len(labels) > 0 {
-		_, _, err = c.client.Issues.AddLabelsToIssue(ctx, c.owner, c.repo, *pr.Number, labels)
+		_, _, err = c.client.Issues.AddLabelsToIssue(ctx, c.owner, c.repo, pr.GetNumber(), labels)
 		if err != nil {
 			return nil, fmt.Errorf("failed to add labels: %w", err)
 		}
 	}
 
-	c.prNumber = *pr.Number
-	c.prSHA = *pr.Head.SHA
-	c.log.Debug(fmt.Sprintf("Pull request created - number: %d, URL: %s", c.prNumber, *pr.HTMLURL))
+	// The generated getters are nil-safe. Dereferencing these fields directly
+	// panicked whenever the API response omitted one, taking down the run instead of
+	// reporting a problem.
+	c.prNumber = pr.GetNumber()
+	c.prSHA = pr.GetHead().GetSHA()
+	c.log.Debug(fmt.Sprintf("Pull request created - number: %d, URL: %s", c.prNumber, pr.GetHTMLURL()))
 	return pr, nil
 }
 
@@ -175,8 +178,8 @@ func (c *Client) GetPullRequestByBranch(ctx context.Context, head, base string) 
 	}
 
 	pr := prs[0]
-	c.prNumber = *pr.Number
-	c.prSHA = *pr.Head.SHA
+	c.prNumber = pr.GetNumber()
+	c.prSHA = pr.GetHead().GetSHA()
 	return pr, nil
 }
 
@@ -257,7 +260,7 @@ func (c *Client) addReviewers(ctx context.Context, pr *github.PullRequest, revie
 		reviewRequest := github.ReviewersRequest{
 			Reviewers: filteredReviewers,
 		}
-		_, _, err := c.client.PullRequests.RequestReviewers(ctx, c.owner, c.repo, *pr.Number, reviewRequest)
+		_, _, err := c.client.PullRequests.RequestReviewers(ctx, c.owner, c.repo, pr.GetNumber(), reviewRequest)
 		if err != nil {
 			return fmt.Errorf("failed to add reviewers: %w", err)
 		}
@@ -391,7 +394,7 @@ func (c *Client) convertCheckRunsToJobInfo(checkRuns []*github.CheckRun) []*JobI
 		}
 
 		job := &JobInfo{
-			ID:         *check.ID,
+			ID:         check.GetID(),
 			Name:       check.GetName(),
 			Status:     check.GetStatus(),
 			Conclusion: check.GetConclusion(),

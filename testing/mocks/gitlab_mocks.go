@@ -41,7 +41,7 @@ func NewGitLabAPIClient() *GitLabAPIClient {
 // SetProjectFromURL implements gitlab.APIClient.
 func (m *GitLabAPIClient) SetProjectFromURL(_ context.Context, url string) error {
 	m.trackCall("SetProjectFromURL", map[string]any{
-		"url": url,
+		argURL: url,
 	})
 	return m.SetProjectFromURLError
 }

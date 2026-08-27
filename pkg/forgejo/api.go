@@ -203,13 +203,24 @@ func (c *Client) MergePullRequest(ctx context.Context, index int64, squash bool,
 
 	d := true
 	c.client.SetContext(ctx)
-	_, _, err := c.client.MergePullRequest(c.owner, c.repo, index, gitea.MergePullRequestOption{
+	merged, resp, err := c.client.MergePullRequest(c.owner, c.repo, index, gitea.MergePullRequestOption{
 		Style:                  style,
 		Title:                  commitTitle,
 		DeleteBranchAfterMerge: &d,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to merge pull request: %w", err)
+	}
+
+	// The SDK reports a rejected merge through its boolean result, not through err:
+	// a non-2xx response yields (false, resp, nil). Ignoring it would report success
+	// for a merge that never happened -- and the caller would then clean up the
+	// branch that still holds the work.
+	if !merged {
+		if resp != nil {
+			return fmt.Errorf("%w: server returned %s", errMergeRejected, resp.Status)
+		}
+		return fmt.Errorf("%w", errMergeRejected)
 	}
 
 	c.log.Debug("Pull request merged successfully")
