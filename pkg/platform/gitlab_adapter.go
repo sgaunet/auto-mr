@@ -14,12 +14,12 @@ import (
 // GitLabAdapter wraps a GitLab client to implement the [Provider] interface.
 // It translates between the platform-agnostic types and the GitLab-specific API.
 type GitLabAdapter struct {
-	client *gitlab.Client
+	client gitlab.APIClient
 	cfg    config.GitLabConfig
 }
 
 // NewGitLabAdapter creates a new GitLab adapter.
-func NewGitLabAdapter(client *gitlab.Client, cfg config.GitLabConfig, _ *bullets.Logger) *GitLabAdapter {
+func NewGitLabAdapter(client gitlab.APIClient, cfg config.GitLabConfig, _ *bullets.Logger) *GitLabAdapter {
 	return &GitLabAdapter{
 		client: client,
 		cfg:    cfg,

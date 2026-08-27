@@ -14,13 +14,13 @@ import (
 // GitHubAdapter wraps a GitHub client to implement the [Provider] interface.
 // It translates between the platform-agnostic types and the GitHub-specific API.
 type GitHubAdapter struct {
-	client *ghclient.Client
+	client ghclient.APIClient
 	cfg    config.GitHubConfig
 	log    *bullets.Logger
 }
 
 // NewGitHubAdapter creates a new GitHub adapter.
-func NewGitHubAdapter(client *ghclient.Client, cfg config.GitHubConfig, log *bullets.Logger) *GitHubAdapter {
+func NewGitHubAdapter(client ghclient.APIClient, cfg config.GitHubConfig, log *bullets.Logger) *GitHubAdapter {
 	return &GitHubAdapter{
 		client: client,
 		cfg:    cfg,

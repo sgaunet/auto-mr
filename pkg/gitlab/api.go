@@ -18,17 +18,45 @@ import (
 	gitlab "gitlab.com/gitlab-org/api/client-go"
 )
 
+// Option configures [NewClient].
+type Option func(*clientOptions)
+
+// clientOptions holds settings supplied to [NewClient] via [Option] values.
+type clientOptions struct {
+	baseURL string
+}
+
+// WithBaseURL points the client at a specific GitLab API endpoint instead of
+// gitlab.com.
+//
+// The SDK accepts a base URL only at construction and exposes no setter, so this is
+// the sole way to redirect the client — which is what lets tests exercise the real
+// client against an httptest server rather than a fake that echoes its own inputs.
+func WithBaseURL(url string) Option {
+	return func(o *clientOptions) { o.baseURL = url }
+}
+
 // NewClient creates a new GitLab client authenticated via the GITLAB_TOKEN environment variable.
 //
 // Returns [ErrTokenRequired] if GITLAB_TOKEN is not set.
 // Returns a wrapped error if the underlying GitLab client creation fails.
-func NewClient() (*Client, error) {
+func NewClient(opts ...Option) (*Client, error) {
 	token := strings.TrimSpace(os.Getenv("GITLAB_TOKEN"))
 	if token == "" {
 		return nil, errTokenRequired
 	}
 
-	client, err := gitlab.NewClient(token)
+	var options clientOptions
+	for _, opt := range opts {
+		opt(&options)
+	}
+
+	var sdkOpts []gitlab.ClientOptionFunc
+	if options.baseURL != "" {
+		sdkOpts = append(sdkOpts, gitlab.WithBaseURL(options.baseURL))
+	}
+
+	client, err := gitlab.NewClient(token, sdkOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create GitLab client: %w", err)
 	}

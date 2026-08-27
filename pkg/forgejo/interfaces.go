@@ -9,8 +9,11 @@ import (
 )
 
 // APIClient defines the interface for Forgejo API operations.
-// This interface enables dependency injection and facilitates black box testing
-// by allowing mock implementations to replace the actual Forgejo API client.
+//
+// [platform.ForgejoAdapter] holds a value of this type rather than the concrete [Client],
+// so an implementation can be substituted where the adapter is constructed. Tests use
+// that seam two ways: with a fake from testing/mocks, or with a real [Client] pointed
+// at an httptest server.
 type APIClient interface {
 	// SetRepositoryFromURL configures the repository from a git remote URL.
 	// Supports both HTTPS and SSH formats.

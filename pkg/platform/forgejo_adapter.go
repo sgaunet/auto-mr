@@ -14,13 +14,13 @@ import (
 // ForgejoAdapter wraps a Forgejo client to implement the [Provider] interface.
 // It translates between the platform-agnostic types and the Forgejo-specific API.
 type ForgejoAdapter struct {
-	client *forgejo.Client
+	client forgejo.APIClient
 	cfg    config.ForgejoConfig
 	log    *bullets.Logger
 }
 
 // NewForgejoAdapter creates a new Forgejo adapter.
-func NewForgejoAdapter(client *forgejo.Client, cfg config.ForgejoConfig, log *bullets.Logger) *ForgejoAdapter {
+func NewForgejoAdapter(client forgejo.APIClient, cfg config.ForgejoConfig, log *bullets.Logger) *ForgejoAdapter {
 	return &ForgejoAdapter{
 		client: client,
 		cfg:    cfg,

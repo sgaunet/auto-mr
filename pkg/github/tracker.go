@@ -342,6 +342,3 @@ func (ct *checkTracker) updateSpinnerLoop(checkID int64, spinner *bullets.Spinne
 		spinner.UpdateText(statusText)
 	}
 }
-
-// Ensure checkTracker implements StateTracker interface at compile time.
-var _ StateTracker = (*checkTracker)(nil)

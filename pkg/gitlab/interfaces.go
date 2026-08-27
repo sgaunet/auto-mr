@@ -9,8 +9,11 @@ import (
 )
 
 // APIClient defines the interface for GitLab API operations.
-// This interface enables dependency injection and facilitates black box testing
-// by allowing mock implementations to replace the actual GitLab API client.
+//
+// [platform.GitLabAdapter] holds a value of this type rather than the concrete [Client],
+// so an implementation can be substituted where the adapter is constructed. Tests use
+// that seam two ways: with a fake from testing/mocks, or with a real [Client] pointed
+// at an httptest server.
 type APIClient interface {
 	// SetProjectFromURL configures the project from a git remote URL.
 	// Supports both HTTPS and SSH formats.
@@ -45,40 +48,6 @@ type APIClient interface {
 
 	// GetMergeRequestsByBranch returns all open merge requests for the given source branch.
 	GetMergeRequestsByBranch(ctx context.Context, sourceBranch string) ([]*gitlab.BasicMergeRequest, error)
-}
-
-// StateTracker defines the interface for thread-safe job state management.
-// This interface abstracts the jobTracker functionality to enable testing
-// of state transitions and display handle management without real API calls.
-type StateTracker interface {
-	// update processes new jobs, detects state transitions, and updates handles.
-	// Returns a list of state transition descriptions for logging/debugging.
-	update(newJobs []*Job, logger *bullets.UpdatableLogger) []string
-
-	// getJob retrieves a job by ID with read lock.
-	// Returns the Job and a boolean indicating if the job exists.
-	getJob(id int64) (*Job, bool)
-
-	// setJob stores a job by ID with write lock.
-	setJob(id int64, job *Job)
-
-	// getHandle retrieves a bullet handle by job ID with read lock.
-	// Returns the handle and a boolean indicating if it exists.
-	getHandle(id int64) (*bullets.BulletHandle, bool)
-
-	// setHandle stores a bullet handle for a job ID with write lock.
-	setHandle(id int64, handle *bullets.BulletHandle)
-
-	// getSpinner retrieves a spinner by ID with read lock.
-	// Returns the spinner and a boolean indicating if it exists.
-	getSpinner(id int64) (*bullets.Spinner, bool)
-
-	// setSpinner stores a spinner for a job ID with write lock.
-	setSpinner(id int64, spinner *bullets.Spinner)
-
-	// deleteSpinner removes a spinner with write lock.
-	// Stops the animation before deletion.
-	deleteSpinner(id int64)
 }
 
 // DisplayRenderer defines the interface for UI rendering operations.
