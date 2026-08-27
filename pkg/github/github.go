@@ -178,7 +178,7 @@ func (c *Client) pollWorkflowsOnce(
 		return "", false, nil
 	}
 
-	allCompleted, conclusion := c.processWorkflowsWithJobTracking(pollCtx, tracker)
+	allCompleted, conclusion := c.processWorkflowsWithJobTracking(pollCtx, tracker, checkRuns)
 	return conclusion, allCompleted, nil
 }
 
@@ -196,18 +196,20 @@ func (c *Client) reportWorkflowOutcome(conclusion string, elapsed time.Duration)
 }
 
 // processWorkflowsWithJobTracking processes workflows using checkTracker for individual job display.
-func (c *Client) processWorkflowsWithJobTracking(ctx context.Context, tracker *checkTracker) (bool, string) {
+func (c *Client) processWorkflowsWithJobTracking(
+	ctx context.Context, tracker *checkTracker, checkRuns *github.ListCheckRunsResults,
+) (bool, string) {
 	// Try to fetch workflow jobs
 	jobs, err := c.fetchWorkflowJobs(ctx)
 	if err != nil {
 		c.log.Debug(fmt.Sprintf("Failed to fetch workflow jobs, falling back to check runs: %v", err))
-		return c.fallbackToCheckRuns(ctx, tracker)
+		return c.checkRunsFallback(tracker, checkRuns)
 	}
 
 	// If no jobs found, fall back to check runs
 	if len(jobs) == 0 {
 		c.log.Debug("No workflow jobs found, falling back to check runs")
-		return c.fallbackToCheckRuns(ctx, tracker)
+		return c.checkRunsFallback(tracker, checkRuns)
 	}
 
 	// Update check tracker with new jobs (creates/updates handles automatically)
@@ -221,17 +223,13 @@ func (c *Client) processWorkflowsWithJobTracking(ctx context.Context, tracker *c
 }
 
 // fallbackToCheckRuns attempts to fall back to check runs API.
-func (c *Client) fallbackToCheckRuns(ctx context.Context, tracker *checkTracker) (bool, string) {
-	checkRuns, _, err := c.client.Checks.ListCheckRunsForRef(
-		ctx, c.owner, c.repo, c.prSHA,
-		&github.ListCheckRunsOptions{
-			ListOptions: github.ListOptions{PerPage: maxCheckRunsPerPage},
-		},
-	)
-	if err == nil && checkRuns.GetTotal() > 0 {
-		return c.processCheckRunsFallback(tracker, checkRuns.CheckRuns)
+func (c *Client) checkRunsFallback(
+	tracker *checkTracker, checkRuns *github.ListCheckRunsResults,
+) (bool, string) {
+	if checkRuns == nil || checkRuns.GetTotal() == 0 {
+		return false, ""
 	}
-	return false, ""
+	return c.processCheckRunsFallback(tracker, checkRuns.CheckRuns)
 }
 
 // analyzeJobCompletion checks if all jobs are completed and determines overall conclusion.
