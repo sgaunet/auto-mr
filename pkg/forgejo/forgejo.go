@@ -122,12 +122,17 @@ func (c *Client) WaitForPipeline(ctx context.Context, timeout time.Duration) (st
 			if overallCtx.Err() != nil {
 				break // Budget spent or cancelled; reported after the loop.
 			}
-			return "", err
-		}
-		if done {
+			if !errors.Is(err, errTransientAPI) {
+				return "", err
+			}
+			// Rate limits and server-side faults are expected over a long wait; the
+			// next poll retries rather than abandoning a request whose CI may be
+			// about to pass.
+			c.log.Debug(fmt.Sprintf("Transient error while polling, will retry: %v", err))
+		} else if done {
 			return c.reportPipelineOutcome(result, time.Since(start)), nil
 		}
-		if !polling.Sleep(overallCtx, statusPollInterval) {
+		if !polling.Sleep(overallCtx, polling.DefaultSchedule.IntervalFor(time.Since(start))) {
 			break
 		}
 	}
@@ -155,8 +160,13 @@ func (c *Client) pollStatusOnce(
 	// earlier, unrelated operation.
 	c.client.SetContext(overallCtx)
 
-	cs, _, err := c.client.GetCombinedStatus(c.owner, c.repo, c.prSHA)
+	cs, resp, err := c.client.GetCombinedStatus(c.owner, c.repo, c.prSHA)
 	if err != nil {
+		// The gitea SDK returns plain errors with no status code, so retryability has
+		// to be read off the response it returns alongside them.
+		if resp != nil && polling.Transient(resp.StatusCode) {
+			return "", false, fmt.Errorf("%w: %w", errTransientAPI, err)
+		}
 		if overallCtx.Err() == nil {
 			c.display.Error(fmt.Sprintf("Failed to get combined status: %v", err))
 		}

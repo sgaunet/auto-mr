@@ -12,7 +12,6 @@ import (
 // Constants for GitLab API operations.
 const (
 	minURLParts            = 2
-	pipelinePollInterval   = 5 * time.Second
 	spinnerUpdateInterval  = 1 * time.Second
 	maxJobDetailsToDisplay = 3
 	statusSuccess          = "success"

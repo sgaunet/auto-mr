@@ -118,13 +118,18 @@ func (c *Client) WaitForWorkflows(ctx context.Context, timeout time.Duration) (s
 			if overallCtx.Err() != nil {
 				break // Budget spent or cancelled; reported after the loop.
 			}
-			return "", err
-		}
-		if done {
+			if !isTransient(err) {
+				return "", err
+			}
+			// Rate limits and server-side faults are expected over a long wait; the
+			// next poll retries rather than abandoning a request whose CI may be
+			// about to pass.
+			c.log.Debug(fmt.Sprintf("Transient error while polling, will retry: %v", err))
+		} else if done {
 			c.reportWorkflowOutcome(conclusion, time.Since(start))
 			return conclusion, nil
 		}
-		if !polling.Sleep(overallCtx, checkPollInterval) {
+		if !polling.Sleep(overallCtx, polling.DefaultSchedule.IntervalFor(time.Since(start))) {
 			break
 		}
 	}
@@ -166,7 +171,7 @@ func (c *Client) pollWorkflowsOnce(
 		},
 	)
 	if err != nil {
-		if overallCtx.Err() == nil {
+		if overallCtx.Err() == nil && !isTransient(err) {
 			c.display.Error(fmt.Sprintf("Failed to list check runs: %v", err))
 		}
 		return "", false, fmt.Errorf("failed to list check runs: %w", err)
@@ -320,4 +325,26 @@ func calculateJobDuration(job *JobInfo) string {
 		return timeutil.FormatDuration(elapsed)
 	}
 	return ""
+}
+
+// isTransient reports whether an error from the GitHub API is worth retrying.
+//
+// go-github models rate limiting with dedicated types and everything else with
+// ErrorResponse, so both shapes have to be inspected to recover the status code.
+func isTransient(err error) bool {
+	var rateLimit *github.RateLimitError
+	if errors.As(err, &rateLimit) {
+		return true
+	}
+
+	var abuse *github.AbuseRateLimitError
+	if errors.As(err, &abuse) {
+		return true
+	}
+
+	var errResp *github.ErrorResponse
+	if errors.As(err, &errResp) && errResp.Response != nil {
+		return polling.Transient(errResp.Response.StatusCode)
+	}
+	return false
 }

@@ -276,13 +276,16 @@ func (c *Client) WaitForPipeline(ctx context.Context, timeout time.Duration) (st
 			if overallCtx.Err() != nil {
 				break // Budget spent or cancelled; reported after the loop.
 			}
+			// No retry classification here: the GitLab SDK already retries 429 and 5xx
+			// responses internally and honours Ratelimit-Reset, so an error reaching
+			// this point has already survived those attempts.
 			return "", err
 		}
 		if done {
 			c.reportPipelineOutcome(status, time.Since(start))
 			return status, nil
 		}
-		if !polling.Sleep(overallCtx, pipelinePollInterval) {
+		if !polling.Sleep(overallCtx, polling.DefaultSchedule.IntervalFor(time.Since(start))) {
 			break
 		}
 	}

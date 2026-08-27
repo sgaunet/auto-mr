@@ -12,7 +12,6 @@ import (
 // Constants for Forgejo API operations.
 const (
 	minURLParts           = 2
-	statusPollInterval    = 5 * time.Second
 	spinnerUpdateInterval = 1 * time.Second
 	pipelineGraceCycles   = 2 // grace poll cycles before treating "no statuses" as success
 )

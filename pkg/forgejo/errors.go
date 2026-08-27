@@ -8,6 +8,7 @@ var (
 	errInvalidURLFormat = errors.New("invalid Forgejo URL format")
 	errWorkflowTimeout  = errors.New("timeout waiting for pipeline completion")
 	errWorkflowCanceled = errors.New("canceled while waiting for pipeline completion")
+	errTransientAPI     = errors.New("transient API failure")
 	errPRNotFound       = errors.New("no pull request found for branch")
 	errPRAlreadyExists  = errors.New("pull request already exists for this branch")
 
