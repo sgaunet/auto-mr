@@ -225,3 +225,32 @@ func setupTestRepo(t *testing.T) *git.Repository {
 
 	return repo
 }
+
+// TestPushBranch_ContextCancelled verifies that the go-git push path honours the
+// caller's context.
+//
+// go-git's Push helper runs on context.Background() and so cannot be interrupted:
+// a stalled transport would block indefinitely and never reach the native git
+// fallback, which is itself bounded. PushBranch therefore uses PushContext. This
+// test would hang, rather than fail, without that change.
+func TestPushBranch_ContextCancelled(t *testing.T) {
+	repo, err := git.OpenRepository(newRepoWithBranches(t, "main"))
+	if err != nil {
+		t.Fatalf("OpenRepository: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately.
+
+	done := make(chan error, 1)
+	go func() { done <- repo.PushBranch(ctx, "main") }()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Error("PushBranch returned nil for a cancelled context; expected an error")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("PushBranch did not return for a cancelled context; the push path is unbounded")
+	}
+}

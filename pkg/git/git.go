@@ -17,7 +17,7 @@
 //	repo.SetLogger(logger)
 //	branch, _ := repo.GetCurrentBranch()
 //	platform, _ := repo.DetectPlatform("https://git.example.com")
-//	repo.PushBranch(branch)
+//	repo.PushBranch(ctx, branch)
 //
 // Thread Safety: [Repository] is not safe for concurrent use.
 package git
@@ -495,12 +495,19 @@ func (r *Repository) DetectPlatform(forgejoURL string) (Platform, error) {
 // If the branch is already up to date, no error is returned.
 //
 // Parameters:
+//   - ctx: context for cancellation (further bounded by networkGitTimeout)
 //   - branchName: the local branch name to push
-func (r *Repository) PushBranch(branchName string) error {
+func (r *Repository) PushBranch(ctx context.Context, branchName string) error {
 	r.log.Debug("Pushing branch: " + branchName)
 
-	// Priority 1: Try go-git push
-	err := r.repo.Push(&git.PushOptions{
+	// Priority 1: Try go-git push. PushContext is required rather than Push, which
+	// go-git implements with context.Background() and therefore never bounds: a
+	// stalled transport would block here forever and never reach the native git
+	// fallback below, which is itself bounded by networkGitTimeout.
+	pushCtx, cancel := context.WithTimeout(ctx, networkGitTimeout)
+	defer cancel()
+
+	err := r.repo.PushContext(pushCtx, &git.PushOptions{
 		RemoteName: "origin",
 		RefSpecs: []config.RefSpec{
 			config.RefSpec("refs/heads/" + branchName + ":refs/heads/" + branchName),
@@ -514,7 +521,7 @@ func (r *Repository) PushBranch(branchName string) error {
 
 	// Priority 2: Fall back to native git push (uses system SSH agent/config)
 	r.log.Debug("go-git push failed, falling back to native git: " + err.Error())
-	return r.pushBranchViaNativeGit(branchName)
+	return r.pushBranchViaNativeGit(ctx, branchName)
 }
 
 // SwitchBranch switches to the specified branch using native "git switch".
@@ -796,8 +803,8 @@ func (r *Repository) getMainBranchViaNativeGit() (string, error) {
 // pushBranchViaNativeGit pushes a branch using native git push.
 // This uses the system's SSH binary and agent, which handles more SSH configurations
 // than go-git's built-in SSH implementation.
-func (r *Repository) pushBranchViaNativeGit(branchName string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), networkGitTimeout)
+func (r *Repository) pushBranchViaNativeGit(ctx context.Context, branchName string) error {
+	ctx, cancel := context.WithTimeout(ctx, networkGitTimeout)
 	defer cancel()
 
 	cmd := r.gitCommand(ctx, "push", "-u", "origin", "--", branchName)

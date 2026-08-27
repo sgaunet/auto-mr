@@ -272,7 +272,7 @@ func runAutoMR(cmd *cobra.Command, useManualLabels bool, manualLabelsValue strin
 		return err
 	}
 
-	if err := prepareRepository(repo, currentBranch); err != nil {
+	if err := prepareRepository(context.Background(), repo, currentBranch); err != nil {
 		return err
 	}
 
@@ -307,10 +307,10 @@ func validateBranches(repo *git.Repository) (string, string, error) {
 	return mainBranch, currentBranch, nil
 }
 
-func prepareRepository(repo *git.Repository, currentBranch string) error {
+func prepareRepository(ctx context.Context, repo *git.Repository, currentBranch string) error {
 	log.Infof("Pushing branch: %s", currentBranch)
 	log.IncreasePadding()
-	if err := repo.PushBranch(currentBranch); err != nil {
+	if err := repo.PushBranch(ctx, currentBranch); err != nil {
 		log.DecreasePadding()
 		return fmt.Errorf("failed to push branch: %w", err)
 	}
