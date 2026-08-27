@@ -535,7 +535,7 @@ func (r *Repository) SwitchBranch(ctx context.Context, branchName string) error 
 	ctx, cancel := context.WithTimeout(ctx, localGitTimeout)
 	defer cancel()
 
-	cmd := r.gitCommand(ctx, "switch", branchName)
+	cmd := r.gitCommand(ctx, "switch", "--", branchName)
 	output, err := cmd.CombinedOutput()
 
 	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
@@ -602,7 +602,7 @@ func (r *Repository) DeleteBranch(ctx context.Context, branchName string) error 
 	ctx, cancel := context.WithTimeout(ctx, localGitTimeout)
 	defer cancel()
 
-	cmd := r.gitCommand(ctx, "branch", "-D", branchName)
+	cmd := r.gitCommand(ctx, "branch", "-D", "--", branchName)
 	output, err := cmd.CombinedOutput()
 
 	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
@@ -800,7 +800,7 @@ func (r *Repository) pushBranchViaNativeGit(branchName string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), networkGitTimeout)
 	defer cancel()
 
-	cmd := r.gitCommand(ctx, "push", "-u", "origin", branchName)
+	cmd := r.gitCommand(ctx, "push", "-u", "origin", "--", branchName)
 	output, err := cmd.CombinedOutput()
 
 	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {

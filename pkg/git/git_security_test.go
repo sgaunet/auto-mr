@@ -465,3 +465,35 @@ func TestGetHTTPSAuth_LegitimateHostsAuthenticate(t *testing.T) {
 		})
 	}
 }
+
+// TestNativeGit_BranchNameIsNotParsedAsFlag verifies that a branch name shaped like
+// a git option is passed as a ref rather than interpreted as one.
+//
+// Branch names reaching these calls come from git itself, including the remote's
+// advertised HEAD symref, so a malicious server can influence them. Local git will
+// not create a branch whose name begins with a hyphen, but it will happily parse one
+// as an option if it arrives unseparated on the command line -- "git switch --help"
+// prints help and exits zero, which would report success for a switch that never
+// happened. The "--" separator makes git treat the value as a ref, so these calls
+// must fail.
+func TestNativeGit_BranchNameIsNotParsedAsFlag(t *testing.T) {
+	flagLike := []string{"--help", "--version", "-D"}
+
+	for _, name := range flagLike {
+		t.Run(name, func(t *testing.T) {
+			repo, err := git.OpenRepository(newRepoWithBranches(t, "main"))
+			if err != nil {
+				t.Fatalf("OpenRepository: %v", err)
+			}
+
+			if err := repo.SwitchBranch(t.Context(), name); err == nil {
+				t.Errorf("SwitchBranch(%q) returned nil; the argument was parsed as an option "+
+					"instead of a ref name", name)
+			}
+			if err := repo.DeleteBranch(t.Context(), name); err == nil {
+				t.Errorf("DeleteBranch(%q) returned nil; the argument was parsed as an option "+
+					"instead of a ref name", name)
+			}
+		})
+	}
+}
