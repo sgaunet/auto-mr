@@ -1,6 +1,7 @@
 package git_test
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,7 +16,7 @@ import (
 	"github.com/sgaunet/auto-mr/pkg/git"
 )
 
-// initTestRepo creates a proper git repository using go-git with a remote origin
+// initTestRepo creates a proper git repository using go-git with a remote origin.
 func initTestRepo(t *testing.T, path string) {
 	t.Helper()
 	repo, err := gogit.PlainInit(path, false)
@@ -102,7 +103,7 @@ func hermeticGitEnv() []string {
 
 // gitCmd builds a native git command rooted at dir with a hermetic environment.
 func gitCmd(dir string, args ...string) *exec.Cmd {
-	cmd := exec.Command("git", args...)
+	cmd := exec.CommandContext(context.Background(), "git", args...)
 	cmd.Dir = dir
 	cmd.Env = hermeticGitEnv()
 	return cmd

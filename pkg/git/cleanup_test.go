@@ -2,7 +2,7 @@ package git_test
 
 import (
 	"errors"
-	"os"
+	"strings"
 	"testing"
 
 	"github.com/sgaunet/auto-mr/pkg/git"
@@ -173,7 +173,7 @@ func TestCleanupReport_FirstError(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			got := tc.report.FirstError()
-			if got != tc.expectError {
+			if !errors.Is(got, tc.expectError) {
 				t.Errorf("FirstError() = %v, want %v", got, tc.expectError)
 			}
 		})
@@ -198,68 +198,47 @@ func TestCleanupReport_Metadata(t *testing.T) {
 
 // TestCleanupReport_ErrorMessages verifies error messages include recovery instructions.
 func TestCleanupReport_ErrorMessages(t *testing.T) {
-	tests := []struct {
-		name         string
-		errorField   string
-		expectedText string
-	}{
-		{
-			name:         "switch_error_contains_recovery_instructions",
-			errorField:   "SwitchError",
-			expectedText: "git stash",
-		},
-		{
-			name:         "pull_error_contains_recovery_instructions",
-			errorField:   "PullError",
-			expectedText: "git pull",
-		},
-		{
-			name:         "prune_error_contains_recovery_instructions",
-			errorField:   "PruneError",
-			expectedText: "git fetch --prune",
-		},
-		{
-			name:         "delete_error_contains_recovery_instructions",
-			errorField:   "DeleteError",
-			expectedText: "git branch -D",
-		},
+	// Run cleanup against a repository whose main branch does not exist, so the very
+	// first step fails and the report carries the recovery guidance for it.
+	//
+	// The previous version of this test logged the text it expected and then asserted
+	// only that a freshly allocated report was non-nil, so it passed regardless of
+	// what Cleanup produced. The recovery instructions are the user's only route out
+	// of a half-finished cleanup, so they are worth asserting for real.
+	repoDir := newRepoWithBranches(t, "main")
+	repo, err := git.OpenRepository(repoDir)
+	if err != nil {
+		t.Fatalf("OpenRepository: %v", err)
 	}
 
-	// Create a mock error for testing
-	mockErr := os.ErrNotExist
+	report := repo.Cleanup(t.Context(), "no-such-main-branch", "feature")
+	if report == nil {
+		t.Fatal("Cleanup returned a nil report")
+	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			report := &git.CleanupReport{}
+	if report.SwitchError == nil {
+		t.Fatal("expected a switch error when the target branch does not exist")
+	}
+	if report.SwitchedBranch {
+		t.Error("report claims the branch was switched even though switching failed")
+	}
 
-			// This test verifies that error messages would contain recovery instructions
-			// The actual error message construction happens in cleanup.go
-			// We're just verifying the structure here
+	// Switching is a critical step, so cleanup must stop rather than press on.
+	if report.PulledChanges || report.Pruned || report.DeletedBranch {
+		t.Error("cleanup continued past a failed switch; later steps must not run")
+	}
+	if report.Success() {
+		t.Error("Success() is true for a cleanup whose first step failed")
+	}
 
-			switch tc.errorField {
-			case "SwitchError":
-				if mockErr != nil {
-					// In actual implementation, error message will contain recovery text
-					t.Log("SwitchError would contain: ", tc.expectedText)
-				}
-			case "PullError":
-				if mockErr != nil {
-					t.Log("PullError would contain: ", tc.expectedText)
-				}
-			case "PruneError":
-				if mockErr != nil {
-					t.Log("PruneError would contain: ", tc.expectedText)
-				}
-			case "DeleteError":
-				if mockErr != nil {
-					t.Log("DeleteError would contain: ", tc.expectedText)
-				}
-			}
-
-			// Verify report structure is correct
-			if report == nil {
-				t.Error("Expected non-nil report")
-			}
-		})
+	// The guidance must name the commands that get the user unstuck.
+	msg := report.SwitchError.Error()
+	for _, want := range []string{"git stash", "git switch"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("switch error does not mention %q; got:\n%s", want, msg)
+		}
+	}
+	if report.FirstError() == nil {
+		t.Error("FirstError() returned nil despite a failed step")
 	}
 }

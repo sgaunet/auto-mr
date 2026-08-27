@@ -42,7 +42,7 @@ func TestEndToEnd_TokenLeakagePrevention(t *testing.T) {
 		}
 	})
 
-	t.Run("error wrapping", func(t *testing.T) {
+	t.Run("error wrapping", func(_ *testing.T) {
 		// Simulate an error that accidentally includes a token
 		baseErr := fmt.Errorf("authentication failed with token: %s", actualToken)
 		sanitizedErr := security.SanitizeError(baseErr)
@@ -71,7 +71,7 @@ func TestEndToEnd_TokenLeakagePrevention(t *testing.T) {
 		}
 	})
 
-	t.Run("concurrent access", func(t *testing.T) {
+	t.Run("concurrent access", func(_ *testing.T) {
 		// Verify thread safety
 		done := make(chan bool)
 		const goroutines = 100
@@ -94,7 +94,7 @@ func TestEndToEnd_TokenLeakagePrevention(t *testing.T) {
 
 // TestRealWorldScenarios tests scenarios that might occur in production.
 func TestRealWorldScenarios(t *testing.T) {
-	t.Run("git push error with token in url", func(t *testing.T) {
+	t.Run("git push error with token in url", func(_ *testing.T) {
 		// Simulate an error message from git that includes credentials
 		errorMsg := "failed to push to https://oauth2:glpat-secret123@gitlab.com/repo.git: permission denied"
 		sanitized := security.SanitizeString(errorMsg)
@@ -104,7 +104,7 @@ func TestRealWorldScenarios(t *testing.T) {
 		}
 	})
 
-	t.Run("http basic auth logging", func(t *testing.T) {
+	t.Run("http basic auth logging", func(_ *testing.T) {
 		// Simulate logging auth details
 		token := security.NewSecureToken("ghp_1234567890123456789012345678901234abcd")
 
@@ -119,7 +119,7 @@ func TestRealWorldScenarios(t *testing.T) {
 		}
 	})
 
-	t.Run("ssh key path exposure", func(t *testing.T) {
+	t.Run("ssh key path exposure", func(_ *testing.T) {
 		// Test that full paths are masked
 		fullPath := "/Users/sensitive-username/.ssh/id_ed25519"
 		masked := security.MaskSSHKeyPath(fullPath)
@@ -133,7 +133,7 @@ func TestRealWorldScenarios(t *testing.T) {
 		}
 	})
 
-	t.Run("multiple tokens in same string", func(t *testing.T) {
+	t.Run("multiple tokens in same string", func(_ *testing.T) {
 		// Test that all tokens are sanitized
 		input := "GitLab: glpat-token1 and GitHub: ghp_token2token2token2token2token2token2token2"
 		sanitized := security.SanitizeString(input)
@@ -150,7 +150,7 @@ func TestRealWorldScenarios(t *testing.T) {
 
 // TestSecurityRegression ensures known vulnerabilities stay fixed.
 func TestSecurityRegression(t *testing.T) {
-	t.Run("issue_46_token_in_debug_log", func(t *testing.T) {
+	t.Run("issue_46_token_in_debug_log", func(_ *testing.T) {
 		// Original issue: tokens could leak in debug mode
 		token := security.NewSecureToken("glpat-originalsecret123456")
 
@@ -162,7 +162,7 @@ func TestSecurityRegression(t *testing.T) {
 		}
 	})
 
-	t.Run("struct_stringification", func(t *testing.T) {
+	t.Run("struct_stringification", func(_ *testing.T) {
 		// Ensure structs containing SecureToken don't leak
 		type Config struct {
 			Token security.SecureToken

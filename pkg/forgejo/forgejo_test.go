@@ -14,18 +14,11 @@ import (
 // TestNewClientMissingToken verifies that NewClient returns ErrTokenRequired when
 // FORGEJO_TOKEN is not set.
 func TestNewClientMissingToken(t *testing.T) {
-	original := os.Getenv("FORGEJO_TOKEN")
+	// t.Setenv to empty then Unsetenv gives automatic restoration of the original.
+	t.Setenv("FORGEJO_TOKEN", "")
 	if err := os.Unsetenv("FORGEJO_TOKEN"); err != nil {
 		t.Fatalf("failed to unset FORGEJO_TOKEN: %v", err)
 	}
-
-	defer func() {
-		if original != "" {
-			if err := os.Setenv("FORGEJO_TOKEN", original); err != nil {
-				t.Errorf("failed to restore FORGEJO_TOKEN: %v", err)
-			}
-		}
-	}()
 
 	_, err := forgejo.NewClient(t.Context(), "https://forgejo.example.com")
 	if err == nil {
@@ -42,22 +35,7 @@ func TestNewClientMissingToken(t *testing.T) {
 // Authorization header. This guards against the gitea SDK rejecting a token with a
 // trailing newline ("net/http: invalid header field value for Authorization").
 func TestNewClientWhitespaceTokenTrimmed(t *testing.T) {
-	original := os.Getenv("FORGEJO_TOKEN")
-	if err := os.Setenv("FORGEJO_TOKEN", "   \n\t "); err != nil {
-		t.Fatalf("failed to set FORGEJO_TOKEN: %v", err)
-	}
-
-	defer func() {
-		if original == "" {
-			if err := os.Unsetenv("FORGEJO_TOKEN"); err != nil {
-				t.Errorf("failed to unset FORGEJO_TOKEN: %v", err)
-			}
-			return
-		}
-		if err := os.Setenv("FORGEJO_TOKEN", original); err != nil {
-			t.Errorf("failed to restore FORGEJO_TOKEN: %v", err)
-		}
-	}()
+	t.Setenv("FORGEJO_TOKEN", "   \n\t ")
 
 	_, err := forgejo.NewClient(t.Context(), "https://forgejo.example.com")
 	if !errors.Is(err, forgejo.ErrTokenRequired) {
@@ -69,9 +47,7 @@ func TestNewClientWhitespaceTokenTrimmed(t *testing.T) {
 // when FORGEJO_TOKEN is set. The SDK performs a live version check on the base URL,
 // so this test skips when the example host is unreachable.
 func TestNewClientWithToken(t *testing.T) {
-	if err := os.Setenv("FORGEJO_TOKEN", "test-token"); err != nil {
-		t.Fatalf("failed to set FORGEJO_TOKEN: %v", err)
-	}
+	t.Setenv("FORGEJO_TOKEN", "test-token")
 
 	defer func() {
 		if err := os.Unsetenv("FORGEJO_TOKEN"); err != nil {
@@ -154,7 +130,7 @@ func TestLabelType(t *testing.T) {
 // TestAPIClientInterface verifies that a nil *Client pointer satisfies APIClient at compile
 // time (the var _ check in interfaces.go already guards this, but an explicit cast here
 // gives a clear test failure message if the interface is broken).
-func TestAPIClientInterface(t *testing.T) {
+func TestAPIClientInterface(_ *testing.T) {
 	var _ forgejo.APIClient = (*forgejo.Client)(nil)
 }
 
@@ -212,17 +188,11 @@ func TestStatusStateConstants(t *testing.T) {
 // still returns ErrTokenRequired when the token is absent, rather than panicking.
 // (URL validation occurs after token validation in the current implementation.)
 func TestNewClientEmptyBaseURL(t *testing.T) {
-	original := os.Getenv("FORGEJO_TOKEN")
+	// t.Setenv registers the restore; Unsetenv then removes it for this test.
+	t.Setenv("FORGEJO_TOKEN", "")
 	if err := os.Unsetenv("FORGEJO_TOKEN"); err != nil {
 		t.Fatalf("failed to unset FORGEJO_TOKEN: %v", err)
 	}
-	defer func() {
-		if original != "" {
-			if err := os.Setenv("FORGEJO_TOKEN", original); err != nil {
-				t.Errorf("failed to restore FORGEJO_TOKEN: %v", err)
-			}
-		}
-	}()
 
 	for _, base := range []string{"", "   ", "\t"} {
 		_, err := forgejo.NewClient(t.Context(), base)
@@ -249,7 +219,7 @@ func TestErrorSentinelsAreDistinct(t *testing.T) {
 		{"ErrPRAlreadyExists", forgejo.ErrPRAlreadyExists},
 	}
 
-	for i := 0; i < len(sentinels); i++ {
+	for i := range sentinels {
 		for j := i + 1; j < len(sentinels); j++ {
 			a, b := sentinels[i], sentinels[j]
 			if errors.Is(a.err, b.err) || errors.Is(b.err, a.err) {

@@ -192,16 +192,8 @@ func TestErrorSanitization(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Set the token environment variable
-			oldValue := os.Getenv(tt.envVar)
-			os.Setenv(tt.envVar, tt.envValue)
-			defer func() {
-				if oldValue != "" {
-					os.Setenv(tt.envVar, oldValue)
-				} else {
-					os.Unsetenv(tt.envVar)
-				}
-			}()
+			// t.Setenv restores the previous value when the subtest ends.
+			t.Setenv(tt.envVar, tt.envValue)
 
 			// Create a temporary repo
 			tempDir := t.TempDir()
@@ -250,7 +242,7 @@ func TestFormattingOperations(t *testing.T) {
 
 	// Set a token
 	testToken := "glpat-formattest123456"
-	os.Setenv("GITLAB_TOKEN", testToken)
+	t.Setenv("GITLAB_TOKEN", testToken)
 	defer os.Unsetenv("GITLAB_TOKEN")
 
 	var logBuffer bytes.Buffer
@@ -270,8 +262,8 @@ func TestFormattingOperations(t *testing.T) {
 	logOutput := logBuffer.String()
 	formattedOutputs := []string{
 		logOutput,
-		fmt.Sprintf("%s", logOutput),
-		fmt.Sprintf("%v", logOutput),
+		logOutput,
+		logOutput,
 		fmt.Sprintf("%+v", logOutput),
 	}
 
@@ -304,7 +296,7 @@ func setupTestGitRepo(t *testing.T, dir, remoteURL string) {
 // runCmd executes a command and fails the test if it errors.
 func runCmd(t *testing.T, dir string, name string, args ...string) {
 	t.Helper()
-	cmd := exec.Command(name, args...)
+	cmd := exec.CommandContext(t.Context(), name, args...)
 	cmd.Dir = dir
 	// Same hermetic environment as gitCmd: never inherit GIT_* from a git hook
 	// or an outer git invocation (see #102).

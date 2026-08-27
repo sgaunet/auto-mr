@@ -22,9 +22,7 @@ func TestClientConstructor(t *testing.T) {
 // Authorization header.
 func TestNewClientWhitespaceTokenTrimmed(t *testing.T) {
 	original := os.Getenv("GITHUB_TOKEN")
-	if err := os.Setenv("GITHUB_TOKEN", "   \n\t "); err != nil {
-		t.Fatalf("failed to set GITHUB_TOKEN: %v", err)
-	}
+	t.Setenv("GITHUB_TOKEN", "   \n\t ")
 
 	defer func() {
 		if original == "" {
@@ -32,9 +30,6 @@ func TestNewClientWhitespaceTokenTrimmed(t *testing.T) {
 				t.Errorf("failed to unset GITHUB_TOKEN: %v", err)
 			}
 			return
-		}
-		if err := os.Setenv("GITHUB_TOKEN", original); err != nil {
-			t.Errorf("failed to restore GITHUB_TOKEN: %v", err)
 		}
 	}()
 

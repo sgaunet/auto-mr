@@ -86,7 +86,7 @@ func TestMockProvider_Create(t *testing.T) {
 		mr, err := mock.Create(t.Context(), fixtures.ValidCreateParams())
 		require.Error(t, err)
 		assert.Nil(t, mr)
-		assert.True(t, errors.Is(err, platform.ErrAlreadyExists))
+		require.ErrorIs(t, err, platform.ErrAlreadyExists)
 	})
 }
 
@@ -108,7 +108,7 @@ func TestMockProvider_GetByBranch(t *testing.T) {
 		mr, err := mock.GetByBranch(t.Context(), "feature", "main")
 		require.Error(t, err)
 		assert.Nil(t, mr)
-		assert.True(t, errors.Is(err, platform.ErrNotFound))
+		assert.ErrorIs(t, err, platform.ErrNotFound)
 	})
 }
 
@@ -188,7 +188,7 @@ func TestMockProvider_PlatformName(t *testing.T) {
 
 func TestMockProvider_PipelineTimeout(t *testing.T) {
 	mock := mocks.NewPlatformProvider()
-	assert.Equal(t, "", mock.PipelineTimeout())
+	assert.Empty(t, mock.PipelineTimeout())
 
 	mock.PipelineTimeoutValue = "45m"
 	assert.Equal(t, "45m", mock.PipelineTimeout())
@@ -228,18 +228,18 @@ func TestMockProvider_CallTracking(t *testing.T) {
 
 func TestSentinelErrors(t *testing.T) {
 	t.Run("ErrAlreadyExists", func(t *testing.T) {
-		assert.Error(t, platform.ErrAlreadyExists)
+		require.Error(t, platform.ErrAlreadyExists)
 		assert.Contains(t, platform.ErrAlreadyExists.Error(), "already exists")
 	})
 
 	t.Run("ErrNotFound", func(t *testing.T) {
-		assert.Error(t, platform.ErrNotFound)
+		require.Error(t, platform.ErrNotFound)
 		assert.Contains(t, platform.ErrNotFound.Error(), "no merge/pull request found")
 	})
 
 	t.Run("errors_are_unwrappable", func(t *testing.T) {
 		wrapped := errors.Join(platform.ErrAlreadyExists, errors.New("extra context"))
-		assert.True(t, errors.Is(wrapped, platform.ErrAlreadyExists))
+		assert.ErrorIs(t, wrapped, platform.ErrAlreadyExists)
 	})
 }
 
@@ -340,7 +340,7 @@ func TestWorkflow_CreateWaitMerge(t *testing.T) {
 		// Create fails with already exists
 		_, err := mock.Create(t.Context(), fixtures.ValidCreateParams())
 		require.Error(t, err)
-		assert.True(t, errors.Is(err, platform.ErrAlreadyExists))
+		require.ErrorIs(t, err, platform.ErrAlreadyExists)
 
 		// Fall back to GetByBranch
 		mr, err := mock.GetByBranch(t.Context(), "feature-branch", "main")

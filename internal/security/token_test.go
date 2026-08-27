@@ -75,16 +75,17 @@ func TestSecureToken_FormattingVerbs(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := fmt.Sprintf(tt.format, token)
 			// %q adds quotes, so we need to handle that
-			if tt.format == "%q" {
+			switch tt.format {
+			case "%q":
 				if got != fmt.Sprintf("%q", expected) {
 					t.Errorf("fmt.Sprintf(%q, token) = %q, want quoted %q", tt.format, got, expected)
 				}
-			} else if tt.format == "%#v" {
+			case "%#v":
 				// %#v might include type info, just verify token not present
 				if got != expected {
 					t.Errorf("fmt.Sprintf(%q, token) = %q, want %q", tt.format, got, expected)
 				}
-			} else {
+			default:
 				if got != expected {
 					t.Errorf("fmt.Sprintf(%q, token) = %q, want %q", tt.format, got, expected)
 				}
@@ -146,7 +147,7 @@ func TestSecureToken_NoLeakage(t *testing.T) {
 	// Test various string conversions
 	stringRepresentations := []string{
 		token.String(),
-		fmt.Sprintf("%s", token),
+		token.String(),
 		fmt.Sprintf("%v", token),
 		fmt.Sprintf("%+v", token),
 		fmt.Sprint(token),

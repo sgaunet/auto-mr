@@ -22,7 +22,9 @@ Platform detection is driven by matching the git remote URL against the configur
 | `pkg/commits/` | Conventional commit message parsing and MR/PR title generation |
 | `pkg/platform/` | Platform adapter abstraction (`Provider` interface + per-platform adapters) |
 | `internal/logger/` | Structured logging via `log/slog` |
-| `internal/ui/` | Interactive terminal prompts (survey/v2) |
+| `internal/polling/` | Poll cadence, per-request bounds, transient-failure classification |
+| `internal/urlutil/` | Git remote URL parsing (host and path components) |
+| `internal/labels/` | Label selection helpers |
 | `internal/security/` | Token sanitization and secure error wrapping |
 | `internal/timeutil/` | Human-readable duration formatting |
 | `testing/mocks/` | Mock implementations for black-box tests |
@@ -76,9 +78,6 @@ gitlab:
   assignee: alice
   reviewer: bob
   pipeline_timeout: 45m   # optional, default 30m
-github:
-  assignee: alice
-  reviewer: bob
 github:
   assignee: alice
   reviewer: bob

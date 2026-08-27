@@ -1,10 +1,10 @@
 # auto-mr
 
-A Go-based automated merge request tool for GitLab, GitHub, and self-hosted Forgejo repositories. This tool eliminates the need for external CLI dependencies by using native Go libraries.
+A Go-based automated merge request tool for GitLab, GitHub, and self-hosted Forgejo repositories. Platform APIs, git authentication and interactive prompts all use native Go libraries, so the only external command required is `git` itself.
 
 ## Features
 
-- ✅ Zero external CLI dependencies (replaces `glab`, `gh`, `jq`, `yq`, `gum`)
+- ✅ No platform CLIs required (replaces `glab`, `gh`, `jq`, `yq`, `gum`); only `git` itself is needed
 - ✅ Support for GitLab, GitHub, and self-hosted Forgejo
 - ✅ Interactive label selection
 - ✅ Pipeline/workflow waiting with timeout
@@ -122,7 +122,7 @@ This Go version eliminates these external dependencies:
 | `jq` | Native Go JSON processing |
 | `yq` | Native Go YAML processing |
 | `gum` | Survey library for interactive prompts |
-| `git` | go-git library |
+| `git` | go-git library for push and authentication; the `git` command is still used for cleanup, branch detection, and as a push fallback |
 
 ## Token Permissions
 

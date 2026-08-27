@@ -3,7 +3,6 @@ package commits_test
 import (
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -274,7 +273,7 @@ func TestSetLogger_IsAccepted(t *testing.T) {
 	tr.commit("first commit")
 
 	retriever := commits.NewRetriever(tr.repo)
-	retriever.SetLogger(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	retriever.SetLogger(slog.New(slog.DiscardHandler))
 
 	if _, err := retriever.GetCommits(tr.currentBranch()); err != nil {
 		t.Fatalf("GetCommits after SetLogger: %v", err)
