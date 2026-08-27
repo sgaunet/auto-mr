@@ -12,70 +12,76 @@ import (
 	"strings"
 	"testing"
 
+	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 	"github.com/sgaunet/auto-mr/pkg/git"
 	"github.com/sgaunet/bullets"
 	"golang.org/x/crypto/ssh"
 )
 
-// TestHTTPSAuth_NoTokenLeakage verifies that tokens don't leak through authentication logging.
-func TestHTTPSAuth_NoTokenLeakage(t *testing.T) {
-	// Setup: Create a temporary git repo for testing
-	tempDir := t.TempDir()
-	setupTestGitRepo(t, tempDir, "https://gitlab.com/test/repo.git")
+// Fixture tokens used by the auth tests. They are shaped like real personal access
+// tokens so the sanitizer's prefix patterns apply, and are enumerated by the leak
+// assertions to prove none of them reaches a log or an unintended host.
+const (
+	gitLabCanaryToken  = "glpat-canarytoken1234567890"
+	gitHubCanaryToken  = "ghp_canarytoken123456789012345678901"
+	forgejoCanaryToken = "forgejo-canarytoken1234567890"
+)
 
+// TestHTTPSAuth_NoTokenLeakage verifies that tokens don't leak through authentication logging.
+//
+// The logger must be supplied to the auth path directly. Authentication is resolved
+// inside OpenRepository, before any SetLogger call can take effect, so a test that
+// opens a repository and then attaches a capturing logger observes nothing from the
+// auth path and would pass no matter what that path logged.
+func TestHTTPSAuth_NoTokenLeakage(t *testing.T) {
 	tests := []struct {
 		name      string
 		envVar    string
 		envValue  string
+		remoteURL string
 		forbidden []string
 	}{
 		{
 			name:      "gitlab token",
 			envVar:    "GITLAB_TOKEN",
-			envValue:  "glpat-testsecret1234567890",
-			forbidden: []string{"glpat-testsecret1234567890", "testsecret"},
+			envValue:  gitLabCanaryToken,
+			remoteURL: "https://gitlab.com/test/repo.git",
+			forbidden: []string{gitLabCanaryToken, "canarytoken"},
 		},
 		{
 			name:      "github token",
 			envVar:    "GITHUB_TOKEN",
-			envValue:  "ghp_testsecret12345678901234567890123456",
-			forbidden: []string{"ghp_testsecret12345678901234567890123456", "testsecret"},
+			envValue:  gitHubCanaryToken,
+			remoteURL: "https://github.com/test/repo.git",
+			forbidden: []string{gitHubCanaryToken, "canarytoken"},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Set the token environment variable
-			oldValue := os.Getenv(tt.envVar)
-			os.Setenv(tt.envVar, tt.envValue)
-			defer func() {
-				if oldValue != "" {
-					os.Setenv(tt.envVar, oldValue)
-				} else {
-					os.Unsetenv(tt.envVar)
-				}
-			}()
+			t.Setenv(tt.envVar, tt.envValue)
 
-			// Capture log output
 			var logBuffer bytes.Buffer
 			testLogger := bullets.New(&logBuffer)
 			testLogger.SetLevel(bullets.DebugLevel)
 
-			// Open repository with debug logging
-			repo, err := git.OpenRepository(tempDir)
+			auth, err := git.GetHTTPSAuthForTest(tt.remoteURL, testLogger, "")
 			if err != nil {
-				t.Fatalf("Failed to open repository: %v", err)
+				t.Fatalf("GetHTTPSAuthForTest: %v", err)
 			}
-			repo.SetLogger(testLogger)
+			if auth == nil {
+				t.Fatalf("expected %s to be attached for %q", tt.envVar, tt.remoteURL)
+			}
 
-			// Force authentication setup by trying to get remote URL
-			// This triggers the auth code path
-			_, _ = repo.GetRemoteURL("origin")
-
-			// Check captured logs
 			logOutput := logBuffer.String()
 
-			// Verify no forbidden strings in logs
+			// Guard against this test silently proving nothing again: the auth path
+			// must actually have logged something for the assertions below to mean
+			// anything.
+			if logOutput == "" {
+				t.Fatal("no auth logging captured; the leak assertions below would be vacuous")
+			}
+
 			for _, forbidden := range tt.forbidden {
 				if strings.Contains(logOutput, forbidden) {
 					t.Errorf("Log output contains forbidden string %q:\n%s", forbidden, logOutput)
@@ -306,5 +312,156 @@ func runCmd(t *testing.T, dir string, name string, args ...string) {
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("Command failed: %s %v\nOutput: %s", name, args, string(output))
+	}
+}
+
+// TestGetHTTPSAuth_HostSpoofing verifies that a remote URL which merely resembles a
+// known platform host never receives that platform's token.
+//
+// Substring host matching used to make each of these remotes authenticate as the
+// platform they impersonate, handing a live credential to a host the user does not
+// control. The assertion is on the returned auth method rather than on log output,
+// because only that proves no credential reached the transport.
+func TestGetHTTPSAuth_HostSpoofing(t *testing.T) {
+	t.Setenv("GITLAB_TOKEN", gitLabCanaryToken)
+	t.Setenv("GITHUB_TOKEN", gitHubCanaryToken)
+	t.Setenv("FORGEJO_TOKEN", forgejoCanaryToken)
+
+	const configuredForgejo = "https://git.example.com"
+
+	tests := []struct {
+		name       string
+		remoteURL  string
+		forgejoURL string
+	}{
+		{name: "gitlab_host_suffix", remoteURL: "https://gitlab.com.evil.example/owner/repo.git"},
+		{name: "gitlab_in_path", remoteURL: "https://evil.example/gitlab.com/repo.git"},
+		{name: "gitlab_in_userinfo", remoteURL: "https://gitlab.com@evil.example/repo.git"},
+		{name: "github_host_suffix", remoteURL: "https://github.com.evil.example/owner/repo.git"},
+		{name: "github_in_path", remoteURL: "https://evil.example/github.com/repo.git"},
+		{name: "gitlab_subdomain_lookalike", remoteURL: "https://gitlab.company.example/owner/repo.git"},
+		{name: "unrelated_host", remoteURL: "https://bitbucket.example/owner/repo.git"},
+
+		// With no Forgejo instance configured, FORGEJO_TOKEN must never be attached —
+		// this is the default-branch fallthrough that used to leak it to any host.
+		{name: "forgejo_token_set_but_no_instance_configured", remoteURL: "https://git.example.com/owner/repo.git"},
+
+		// With an instance configured, only that exact host qualifies.
+		{
+			name:       "forgejo_host_mismatch",
+			remoteURL:  "https://evil.example/owner/repo.git",
+			forgejoURL: configuredForgejo,
+		},
+		{
+			name:       "forgejo_host_suffix_spoof",
+			remoteURL:  "https://git.example.com.evil.example/owner/repo.git",
+			forgejoURL: configuredForgejo,
+		},
+		{
+			name:       "forgejo_host_in_path_spoof",
+			remoteURL:  "https://evil.example/git.example.com/repo.git",
+			forgejoURL: configuredForgejo,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var logBuffer bytes.Buffer
+			testLogger := bullets.New(&logBuffer)
+			testLogger.SetLevel(bullets.DebugLevel)
+
+			auth, err := git.GetHTTPSAuthForTest(tt.remoteURL, testLogger, tt.forgejoURL)
+			if err != nil {
+				t.Fatalf("GetHTTPSAuthForTest(%q) returned error: %v", tt.remoteURL, err)
+			}
+			if auth != nil {
+				t.Errorf("remote %q was given credential %v; expected no authentication",
+					tt.remoteURL, auth)
+			}
+
+			// Defense in depth: no token value may appear in the debug output either.
+			for _, token := range []string{gitLabCanaryToken, gitHubCanaryToken, forgejoCanaryToken} {
+				if strings.Contains(logBuffer.String(), token) {
+					t.Errorf("token leaked into log output for remote %q", tt.remoteURL)
+				}
+			}
+		})
+	}
+}
+
+// TestGetHTTPSAuth_LegitimateHostsAuthenticate is the counterpart to the spoofing
+// table: it guards against "fixing" the leak by refusing to authenticate at all.
+func TestGetHTTPSAuth_LegitimateHostsAuthenticate(t *testing.T) {
+	t.Setenv("GITLAB_TOKEN", gitLabCanaryToken)
+	t.Setenv("GITHUB_TOKEN", gitHubCanaryToken)
+
+	t.Setenv("FORGEJO_TOKEN", forgejoCanaryToken)
+
+	tests := []struct {
+		name         string
+		remoteURL    string
+		forgejoURL   string
+		wantUsername string
+		wantPassword string
+	}{
+		{
+			name:         "gitlab_https",
+			remoteURL:    "https://gitlab.com/owner/repo.git",
+			wantUsername: "oauth2",
+			wantPassword: gitLabCanaryToken,
+		},
+		{
+			name:         "github_https",
+			remoteURL:    "https://github.com/owner/repo.git",
+			wantUsername: "x-access-token",
+			wantPassword: gitHubCanaryToken,
+		},
+		{
+			name:         "gitlab_uppercase_host",
+			remoteURL:    "https://GitLab.com/owner/repo.git",
+			wantUsername: "oauth2",
+			wantPassword: gitLabCanaryToken,
+		},
+		{
+			name:         "github_explicit_port",
+			remoteURL:    "https://github.com:443/owner/repo.git",
+			wantUsername: "x-access-token",
+			wantPassword: gitHubCanaryToken,
+		},
+		{
+			name:         "forgejo_configured_host_matches",
+			remoteURL:    "https://git.example.com/owner/repo.git",
+			forgejoURL:   "https://git.example.com",
+			wantUsername: "forgejo",
+			wantPassword: forgejoCanaryToken,
+		},
+		{
+			// The instance is reached over a different port than configured; a host
+			// commonly serves SSH and HTTP separately and both are one trust domain.
+			name:         "forgejo_configured_host_different_port",
+			remoteURL:    "https://git.example.com:3000/owner/repo.git",
+			forgejoURL:   "https://git.example.com",
+			wantUsername: "forgejo",
+			wantPassword: forgejoCanaryToken,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			auth, err := git.GetHTTPSAuthForTest(tt.remoteURL, bullets.New(&bytes.Buffer{}), tt.forgejoURL)
+			if err != nil {
+				t.Fatalf("GetHTTPSAuthForTest(%q) returned error: %v", tt.remoteURL, err)
+			}
+			basic, ok := auth.(*githttp.BasicAuth)
+			if !ok {
+				t.Fatalf("expected *http.BasicAuth for %q, got %T", tt.remoteURL, auth)
+			}
+			if basic.Username != tt.wantUsername {
+				t.Errorf("username = %q, want %q", basic.Username, tt.wantUsername)
+			}
+			if basic.Password != tt.wantPassword {
+				t.Errorf("password did not match the configured token for %q", tt.remoteURL)
+			}
+		})
 	}
 }

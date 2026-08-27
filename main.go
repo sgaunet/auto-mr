@@ -248,7 +248,9 @@ func runAutoMR(cmd *cobra.Command, useManualLabels bool, manualLabelsValue strin
 	}
 	log.Debug("Configuration loaded successfully")
 
-	repo, err := git.OpenRepository(".")
+	// The Forgejo instance URL scopes FORGEJO_TOKEN to that host; without it the
+	// token is never attached to any remote.
+	repo, err := git.OpenRepository(".", git.WithForgejoURL(cfg.Forgejo.URL))
 	if err != nil {
 		return fmt.Errorf("failed to open git repository: %w", err)
 	}

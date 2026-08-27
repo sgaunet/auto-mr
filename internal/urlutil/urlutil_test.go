@@ -276,3 +276,51 @@ func TestExtractPathComponents_Consistency(t *testing.T) {
 		})
 	}
 }
+
+func TestHost(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+		want string
+	}{
+		// Scheme-qualified URLs.
+		{name: "https", url: "https://gitlab.com/owner/repo.git", want: "gitlab.com"},
+		{name: "http", url: "http://gitlab.com/owner/repo.git", want: "gitlab.com"},
+		{name: "https_with_port", url: "https://git.example.com:3000/o/r.git", want: "git.example.com"},
+		{name: "uppercase_is_lowercased", url: "http://GitLab.COM/x", want: "gitlab.com"},
+		{name: "fqdn_trailing_dot_trimmed", url: "https://gitlab.com./o/r.git", want: "gitlab.com"},
+
+		// SSH, both forms.
+		{name: "ssh_scp_style", url: "git@codeberg.org:owner/repo.git", want: "codeberg.org"},
+		{name: "ssh_protocol_with_port", url: "ssh://git@codeberg.org:22/owner/repo.git", want: "codeberg.org"},
+		{name: "ssh_scp_style_no_user", url: "codeberg.org:owner/repo.git", want: "codeberg.org"},
+
+		// IPv6 literals.
+		{name: "ipv6_scp_style", url: "git@[::1]:owner/repo.git", want: "::1"},
+		{name: "ipv6_ssh_protocol", url: "ssh://git@[::1]:22/owner/repo.git", want: "::1"},
+		{name: "ipv6_unterminated_bracket", url: "git@[::1", want: ""},
+
+		// Spoofing shapes: these must NOT reduce to the host they impersonate.
+		// This is the security property the auth path depends on.
+		{name: "spoof_host_suffix", url: "https://gitlab.com.evil.example/x.git", want: "gitlab.com.evil.example"},
+		{name: "spoof_in_path", url: "https://evil.example/gitlab.com", want: "evil.example"},
+		{name: "spoof_github_suffix", url: "https://github.com.evil.example/x.git", want: "github.com.evil.example"},
+		{name: "spoof_in_userinfo", url: "https://github.com@evil.example/x.git", want: "evil.example"},
+
+		// No determinable network host — must fail closed with "".
+		{name: "empty", url: "", want: ""},
+		{name: "whitespace_only", url: "   ", want: ""},
+		{name: "bare_word", url: "not-a-url", want: ""},
+		{name: "absolute_local_path", url: "/srv/git/repo.git", want: ""},
+		{name: "relative_local_path", url: "../sibling/repo.git", want: ""},
+		{name: "file_scheme", url: "file:///srv/git/repo.git", want: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := urlutil.Host(tt.url); got != tt.want {
+				t.Errorf("Host(%q) = %q, want %q", tt.url, got, tt.want)
+			}
+		})
+	}
+}
