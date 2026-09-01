@@ -33,7 +33,7 @@ func ValidMergeRequest() *gitlab.MergeRequest {
 			State:        "opened",
 			SourceBranch: defaultSourceBr,
 			TargetBranch: "main",
-			SHA:          "abc123def456",
+			SHA:          TestCommitSHA,
 			Author: &gitlab.BasicUser{
 				Username: "testuser",
 			},

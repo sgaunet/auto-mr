@@ -1,6 +1,7 @@
 package platform
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"time"
@@ -13,13 +14,13 @@ import (
 // GitHubAdapter wraps a GitHub client to implement the [Provider] interface.
 // It translates between the platform-agnostic types and the GitHub-specific API.
 type GitHubAdapter struct {
-	client *ghclient.Client
+	client ghclient.APIClient
 	cfg    config.GitHubConfig
 	log    *bullets.Logger
 }
 
 // NewGitHubAdapter creates a new GitHub adapter.
-func NewGitHubAdapter(client *ghclient.Client, cfg config.GitHubConfig, log *bullets.Logger) *GitHubAdapter {
+func NewGitHubAdapter(client ghclient.APIClient, cfg config.GitHubConfig, log *bullets.Logger) *GitHubAdapter {
 	return &GitHubAdapter{
 		client: client,
 		cfg:    cfg,
@@ -28,16 +29,16 @@ func NewGitHubAdapter(client *ghclient.Client, cfg config.GitHubConfig, log *bul
 }
 
 // Initialize sets up the GitHub repository from a remote URL.
-func (a *GitHubAdapter) Initialize(remoteURL string) error {
-	if err := a.client.SetRepositoryFromURL(remoteURL); err != nil {
+func (a *GitHubAdapter) Initialize(ctx context.Context, remoteURL string) error {
+	if err := a.client.SetRepositoryFromURL(ctx, remoteURL); err != nil {
 		return fmt.Errorf("failed to set GitHub repository: %w", err)
 	}
 	return nil
 }
 
 // ListLabels returns all available labels, converted to platform-agnostic format.
-func (a *GitHubAdapter) ListLabels() ([]Label, error) {
-	ghLabels, err := a.client.ListLabels()
+func (a *GitHubAdapter) ListLabels(ctx context.Context) ([]Label, error) {
+	ghLabels, err := a.client.ListLabels(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list GitHub labels: %w", err)
 	}
@@ -50,8 +51,8 @@ func (a *GitHubAdapter) ListLabels() ([]Label, error) {
 }
 
 // Create creates a new pull request on GitHub.
-func (a *GitHubAdapter) Create(params CreateParams) (*MergeRequest, error) {
-	pr, err := a.client.CreatePullRequest(
+func (a *GitHubAdapter) Create(ctx context.Context, params CreateParams) (*MergeRequest, error) {
+	pr, err := a.client.CreatePullRequest(ctx,
 		params.SourceBranch, params.TargetBranch,
 		params.Title, params.Body,
 		[]string{a.cfg.Assignee},
@@ -73,8 +74,8 @@ func (a *GitHubAdapter) Create(params CreateParams) (*MergeRequest, error) {
 }
 
 // GetByBranch fetches an existing pull request by source and target branches.
-func (a *GitHubAdapter) GetByBranch(sourceBranch, targetBranch string) (*MergeRequest, error) {
-	pr, err := a.client.GetPullRequestByBranch(sourceBranch, targetBranch)
+func (a *GitHubAdapter) GetByBranch(ctx context.Context, sourceBranch, targetBranch string) (*MergeRequest, error) {
+	pr, err := a.client.GetPullRequestByBranch(ctx, sourceBranch, targetBranch)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get pull request by branch: %w", err)
 	}
@@ -87,8 +88,8 @@ func (a *GitHubAdapter) GetByBranch(sourceBranch, targetBranch string) (*MergeRe
 }
 
 // WaitForPipeline waits for GitHub workflow completion.
-func (a *GitHubAdapter) WaitForPipeline(timeout time.Duration) (string, error) {
-	conclusion, err := a.client.WaitForWorkflows(timeout)
+func (a *GitHubAdapter) WaitForPipeline(ctx context.Context, timeout time.Duration) (string, error) {
+	conclusion, err := a.client.WaitForWorkflows(ctx, timeout)
 	if err != nil {
 		return "", fmt.Errorf("failed to wait for GitHub workflows: %w", err)
 	}
@@ -96,20 +97,20 @@ func (a *GitHubAdapter) WaitForPipeline(timeout time.Duration) (string, error) {
 }
 
 // Approve is a no-op for GitHub (GitHub doesn't require self-approval).
-func (a *GitHubAdapter) Approve(_ int64) error {
+func (a *GitHubAdapter) Approve(_ context.Context, _ int64) error {
 	return nil
 }
 
 // Merge merges a GitHub pull request and deletes the remote branch.
-func (a *GitHubAdapter) Merge(params MergeParams) error {
+func (a *GitHubAdapter) Merge(ctx context.Context, params MergeParams) error {
 	mergeMethod := ghclient.GetMergeMethod(params.Squash)
-	if err := a.client.MergePullRequest(int(params.MRID), mergeMethod, params.CommitTitle); err != nil {
+	if err := a.client.MergePullRequest(ctx, int(params.MRID), mergeMethod, params.CommitTitle); err != nil {
 		return fmt.Errorf("failed to merge pull request: %w", err)
 	}
 
 	// Delete remote branch after successful merge (matching shell script behavior)
 	a.log.Infof("Deleting remote branch: %s", params.SourceBranch)
-	if err := a.client.DeleteBranch(params.SourceBranch); err != nil {
+	if err := a.client.DeleteBranch(ctx, params.SourceBranch); err != nil {
 		a.log.Warnf("Failed to delete remote branch: %v", err)
 		// Don't fail the entire operation if branch deletion fails
 	}

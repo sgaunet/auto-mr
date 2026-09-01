@@ -9,75 +9,45 @@ import (
 )
 
 // APIClient defines the interface for GitLab API operations.
-// This interface enables dependency injection and facilitates black box testing
-// by allowing mock implementations to replace the actual GitLab API client.
+//
+// [platform.GitLabAdapter] holds a value of this type rather than the concrete [Client],
+// so an implementation can be substituted where the adapter is constructed. Tests use
+// that seam two ways: with a fake from testing/mocks, or with a real [Client] pointed
+// at an httptest server.
 type APIClient interface {
 	// SetProjectFromURL configures the project from a git remote URL.
 	// Supports both HTTPS and SSH formats.
-	SetProjectFromURL(url string) error
+	SetProjectFromURL(ctx context.Context, url string) error
 
 	// ListLabels returns all labels available in the project.
-	ListLabels() ([]*Label, error)
+	ListLabels(ctx context.Context) ([]*Label, error)
 
 	// CreateMergeRequest creates a new merge request with the specified parameters.
 	// Returns the created merge request or an error if creation fails.
 	CreateMergeRequest(
+		ctx context.Context,
 		sourceBranch, targetBranch, title, description, assignee, reviewer string,
 		labels []string, squash bool,
 	) (*gitlab.MergeRequest, error)
 
 	// GetMergeRequestByBranch fetches an existing merge request by source and target branches.
 	// Returns errMRNotFound if no matching merge request exists.
-	GetMergeRequestByBranch(sourceBranch, targetBranch string) (*gitlab.MergeRequest, error)
+	GetMergeRequestByBranch(ctx context.Context, sourceBranch, targetBranch string) (*gitlab.MergeRequest, error)
 
 	// WaitForPipeline waits for all pipelines to complete for the merge request.
 	// Returns the overall status (success, failed, etc.) or an error on timeout.
-	WaitForPipeline(timeout time.Duration) (string, error)
+	WaitForPipeline(ctx context.Context, timeout time.Duration) (string, error)
 
 	// ApproveMergeRequest approves a merge request.
 	// Returns an error if the approval fails.
-	ApproveMergeRequest(mrIID int64) error
+	ApproveMergeRequest(ctx context.Context, mrIID int64) error
 
 	// MergeMergeRequest merges a merge request with optional squash.
 	// Returns an error if the merge fails.
-	MergeMergeRequest(mrIID int64, squash bool, commitTitle string) error
+	MergeMergeRequest(ctx context.Context, mrIID int64, squash bool, commitTitle string) error
 
 	// GetMergeRequestsByBranch returns all open merge requests for the given source branch.
-	GetMergeRequestsByBranch(sourceBranch string) ([]*gitlab.BasicMergeRequest, error)
-}
-
-// StateTracker defines the interface for thread-safe job state management.
-// This interface abstracts the jobTracker functionality to enable testing
-// of state transitions and display handle management without real API calls.
-type StateTracker interface {
-	// update processes new jobs, detects state transitions, and updates handles.
-	// Returns a list of state transition descriptions for logging/debugging.
-	update(newJobs []*Job, logger *bullets.UpdatableLogger) []string
-
-	// getJob retrieves a job by ID with read lock.
-	// Returns the Job and a boolean indicating if the job exists.
-	getJob(id int64) (*Job, bool)
-
-	// setJob stores a job by ID with write lock.
-	setJob(id int64, job *Job)
-
-	// getHandle retrieves a bullet handle by job ID with read lock.
-	// Returns the handle and a boolean indicating if it exists.
-	getHandle(id int64) (*bullets.BulletHandle, bool)
-
-	// setHandle stores a bullet handle for a job ID with write lock.
-	setHandle(id int64, handle *bullets.BulletHandle)
-
-	// getSpinner retrieves a spinner by ID with read lock.
-	// Returns the spinner and a boolean indicating if it exists.
-	getSpinner(id int64) (*bullets.Spinner, bool)
-
-	// setSpinner stores a spinner for a job ID with write lock.
-	setSpinner(id int64, spinner *bullets.Spinner)
-
-	// deleteSpinner removes a spinner with write lock.
-	// Stops the animation before deletion.
-	deleteSpinner(id int64)
+	GetMergeRequestsByBranch(ctx context.Context, sourceBranch string) ([]*gitlab.BasicMergeRequest, error)
 }
 
 // DisplayRenderer defines the interface for UI rendering operations.

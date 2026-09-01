@@ -26,7 +26,7 @@ func ValidPullRequest() *github.PullRequest {
 		State:  new("open"),
 		Head: &github.PullRequestBranch{
 			Ref: new(defaultSourceBr),
-			SHA: new("abc123def456"),
+			SHA: new(TestCommitSHA),
 		},
 		Base: &github.PullRequestBranch{
 			Ref: new("main"),
@@ -141,7 +141,7 @@ func WorkflowRun(id int64, status, conclusion string) *github.WorkflowRun {
 		ID:         new(id),
 		Status:     new(status),
 		Conclusion: new(conclusion),
-		HeadSHA:    new("abc123def456"),
+		HeadSHA:    new(TestCommitSHA),
 	}
 }
 

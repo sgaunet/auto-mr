@@ -1,6 +1,7 @@
 package platform
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -26,7 +27,9 @@ var errUnsupportedPlatform = errors.New("unsupported platform")
 // Returns errUnsupportedPlatform if the platform is not GitLab, GitHub, or Forgejo.
 //
 //nolint:ireturn // Factory function must return interface to enable platform abstraction.
-func NewProvider(p git.Platform, cfg *config.Config, logger *bullets.Logger) (Provider, error) {
+func NewProvider(
+	ctx context.Context, p git.Platform, cfg *config.Config, logger *bullets.Logger,
+) (Provider, error) {
 	switch p {
 	case git.PlatformGitLab:
 		client, err := gitlab.NewClient()
@@ -37,7 +40,7 @@ func NewProvider(p git.Platform, cfg *config.Config, logger *bullets.Logger) (Pr
 		return NewGitLabAdapter(client, cfg.GitLab, logger), nil
 
 	case git.PlatformGitHub:
-		client, err := ghclient.NewClient()
+		client, err := ghclient.NewClient(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create GitHub client: %w", err)
 		}
@@ -45,7 +48,7 @@ func NewProvider(p git.Platform, cfg *config.Config, logger *bullets.Logger) (Pr
 		return NewGitHubAdapter(client, cfg.GitHub, logger), nil
 
 	case git.PlatformForgejo:
-		client, err := forgejo.NewClient(cfg.Forgejo.URL)
+		client, err := forgejo.NewClient(ctx, cfg.Forgejo.URL)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create Forgejo client: %w", err)
 		}

@@ -285,13 +285,13 @@ func TestSanitizeMap(t *testing.T) {
 		{
 			name: "case insensitive matching",
 			input: map[string]any{
-				"Token":        "secret1",
-				"PASSWORD":     "secret2",
+				"Token":         "secret1",
+				"PASSWORD":      "secret2",
 				"Authorization": "secret3",
 			},
 			expected: map[string]any{
-				"Token":        "[redacted]",
-				"PASSWORD":     "[redacted]",
+				"Token":         "[redacted]",
+				"PASSWORD":      "[redacted]",
 				"Authorization": "[redacted]",
 			},
 		},

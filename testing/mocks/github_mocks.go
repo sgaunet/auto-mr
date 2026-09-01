@@ -43,6 +43,9 @@ type MethodCall struct {
 // Argument keys used in tracked MethodCall.Args maps, shared across mock clients.
 const (
 	argHead         = "head"
+	argBase         = "base"
+	argURL          = "url"
+	argBody         = "body"
 	argTitle        = "title"
 	argLabels       = "labels"
 	argTimeout      = "timeout"
@@ -60,21 +63,22 @@ func NewGitHubAPIClient() *GitHubAPIClient {
 }
 
 // SetRepositoryFromURL implements github.APIClient.
-func (m *GitHubAPIClient) SetRepositoryFromURL(url string) error {
+func (m *GitHubAPIClient) SetRepositoryFromURL(_ context.Context, url string) error {
 	m.trackCall("SetRepositoryFromURL", map[string]any{
-		"url": url,
+		argURL: url,
 	})
 	return m.SetRepositoryFromURLError
 }
 
 // ListLabels implements github.APIClient.
-func (m *GitHubAPIClient) ListLabels() ([]*ghpkg.Label, error) {
+func (m *GitHubAPIClient) ListLabels(_ context.Context) ([]*ghpkg.Label, error) {
 	m.trackCall("ListLabels", map[string]any{})
 	return m.ListLabelsResponse, m.ListLabelsError
 }
 
 // CreatePullRequest implements github.APIClient.
 func (m *GitHubAPIClient) CreatePullRequest(
+	_ context.Context,
 	head, base, title, body string,
 	assignees, reviewers, labels []string,
 ) (*github.PullRequest, error) {
@@ -82,7 +86,7 @@ func (m *GitHubAPIClient) CreatePullRequest(
 		argHead:     head,
 		"base":      base,
 		argTitle:    title,
-		"body":      body,
+		argBody:     body,
 		"assignees": assignees,
 		"reviewers": reviewers,
 		argLabels:   labels,
@@ -91,7 +95,7 @@ func (m *GitHubAPIClient) CreatePullRequest(
 }
 
 // GetPullRequestByBranch implements github.APIClient.
-func (m *GitHubAPIClient) GetPullRequestByBranch(head, base string) (*github.PullRequest, error) {
+func (m *GitHubAPIClient) GetPullRequestByBranch(_ context.Context, head, base string) (*github.PullRequest, error) {
 	m.trackCall("GetPullRequestByBranch", map[string]any{
 		argHead: head,
 		"base":  base,
@@ -100,7 +104,7 @@ func (m *GitHubAPIClient) GetPullRequestByBranch(head, base string) (*github.Pul
 }
 
 // WaitForWorkflows implements github.APIClient.
-func (m *GitHubAPIClient) WaitForWorkflows(timeout time.Duration) (string, error) {
+func (m *GitHubAPIClient) WaitForWorkflows(_ context.Context, timeout time.Duration) (string, error) {
 	m.trackCall("WaitForWorkflows", map[string]any{
 		argTimeout: timeout,
 	})
@@ -108,7 +112,7 @@ func (m *GitHubAPIClient) WaitForWorkflows(timeout time.Duration) (string, error
 }
 
 // MergePullRequest implements github.APIClient.
-func (m *GitHubAPIClient) MergePullRequest(prNumber int, mergeMethod, commitTitle string) error {
+func (m *GitHubAPIClient) MergePullRequest(_ context.Context, prNumber int, mergeMethod, commitTitle string) error {
 	m.trackCall("MergePullRequest", map[string]any{
 		"prNumber":     prNumber,
 		"mergeMethod":  mergeMethod,
@@ -118,7 +122,7 @@ func (m *GitHubAPIClient) MergePullRequest(prNumber int, mergeMethod, commitTitl
 }
 
 // GetPullRequestsByHead implements github.APIClient.
-func (m *GitHubAPIClient) GetPullRequestsByHead(head string) ([]*github.PullRequest, error) {
+func (m *GitHubAPIClient) GetPullRequestsByHead(_ context.Context, head string) ([]*github.PullRequest, error) {
 	m.trackCall("GetPullRequestsByHead", map[string]any{
 		argHead: head,
 	})
@@ -126,7 +130,7 @@ func (m *GitHubAPIClient) GetPullRequestsByHead(head string) ([]*github.PullRequ
 }
 
 // DeleteBranch implements github.APIClient.
-func (m *GitHubAPIClient) DeleteBranch(branch string) error {
+func (m *GitHubAPIClient) DeleteBranch(_ context.Context, branch string) error {
 	m.trackCall("DeleteBranch", map[string]any{
 		"branch": branch,
 	})

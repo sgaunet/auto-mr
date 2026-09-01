@@ -5,70 +5,67 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/sgaunet/auto-mr/internal/trackmap"
 	"github.com/sgaunet/bullets"
 )
 
 // newCheckTracker creates a new check tracker with initialized maps.
-func newCheckTracker() *checkTracker {
+// The tracker owns a context derived from ctx, which scopes both the spinner
+// animations it creates and its own refresh goroutines. Callers must call [Stop] when
+// the wait ends, including on error: a check left in a running state would otherwise
+// keep its goroutine ticking, since those loops exit only when the check data reaches
+// a terminal state.
+func newCheckTracker(ctx context.Context) *checkTracker {
+	ctx, cancel := context.WithCancel(ctx)
 	return &checkTracker{
-		checks:   make(map[int64]*JobInfo),
-		handles:  make(map[int64]*bullets.BulletHandle),
-		spinners: make(map[int64]*bullets.Spinner),
+		ctx:      ctx,
+		cancel:   cancel,
+		checks:   trackmap.New[int64, *JobInfo](),
+		handles:  trackmap.New[int64, *bullets.BulletHandle](),
+		spinners: trackmap.New[int64, *bullets.Spinner](),
 	}
+}
+
+// Stop tears down the tracker's spinners and refresh goroutines.
+func (ct *checkTracker) Stop() {
+	ct.cancel()
 }
 
 // getCheck retrieves a job/check by ID with read lock.
 func (ct *checkTracker) getCheck(id int64) (*JobInfo, bool) {
-	ct.mu.RLock()
-	defer ct.mu.RUnlock()
-	check, exists := ct.checks[id]
-	return check, exists
+	return ct.checks.Get(id)
 }
 
 // setCheck stores a job/check by ID with write lock.
 func (ct *checkTracker) setCheck(id int64, check *JobInfo) {
-	ct.mu.Lock()
-	defer ct.mu.Unlock()
-	ct.checks[id] = check
+	ct.checks.Set(id, check)
 }
 
 // getHandle retrieves a bullet handle by job/check ID with read lock.
 func (ct *checkTracker) getHandle(id int64) (*bullets.BulletHandle, bool) {
-	ct.mu.RLock()
-	defer ct.mu.RUnlock()
-	handle, exists := ct.handles[id]
-	return handle, exists
+	return ct.handles.Get(id)
 }
 
 // setHandle stores a bullet handle for a job/check ID with write lock.
 func (ct *checkTracker) setHandle(id int64, handle *bullets.BulletHandle) {
-	ct.mu.Lock()
-	defer ct.mu.Unlock()
-	ct.handles[id] = handle
+	ct.handles.Set(id, handle)
 }
 
 // getSpinner retrieves a spinner by ID with read lock.
 func (ct *checkTracker) getSpinner(id int64) (*bullets.Spinner, bool) {
-	ct.mu.RLock()
-	defer ct.mu.RUnlock()
-	spinner, exists := ct.spinners[id]
-	return spinner, exists
+	return ct.spinners.Get(id)
 }
 
 // setSpinner stores a spinner for a job/check ID with write lock.
 func (ct *checkTracker) setSpinner(id int64, spinner *bullets.Spinner) {
-	ct.mu.Lock()
-	defer ct.mu.Unlock()
-	ct.spinners[id] = spinner
+	ct.spinners.Set(id, spinner)
 }
 
 // deleteSpinner removes a spinner with write lock.
 func (ct *checkTracker) deleteSpinner(id int64) {
-	ct.mu.Lock()
-	defer ct.mu.Unlock()
-	if spinner, exists := ct.spinners[id]; exists {
-		spinner.Stop() // Stop animation before deleting
-		delete(ct.spinners, id)
+	if spinner, exists := ct.spinners.Get(id); exists {
+		spinner.Stop()
+		ct.spinners.Delete(id)
 	}
 }
 
@@ -117,7 +114,7 @@ func (ct *checkTracker) handleNewCheck(newCheck *JobInfo, logger *bullets.Updata
 	statusText := formatJobStatus(newCheck)
 
 	if newCheck.Status == statusInProgress || newCheck.Status == statusQueued {
-		spinner := logger.SpinnerCircle(context.Background(), statusText)
+		spinner := logger.SpinnerCircle(ct.ctx, statusText)
 		ct.setSpinner(newCheck.ID, spinner)
 		// Start time update loop for any check with spinner that has started timing
 		if newCheck.StartedAt != nil {
@@ -146,10 +143,7 @@ func (ct *checkTracker) handleCheckStatusChange(
 // detectRemovedChecks detects checks that have been removed.
 func (ct *checkTracker) detectRemovedChecks(newCheckIDs map[int64]bool) []string {
 	var transitions []string
-	ct.mu.RLock()
-	defer ct.mu.RUnlock()
-
-	for id := range ct.checks {
+	for _, id := range ct.checks.Keys() {
 		if !newCheckIDs[id] {
 			transitions = append(transitions, fmt.Sprintf("Job %d removed", id))
 		}
@@ -253,13 +247,11 @@ func (ct *checkTracker) transitionCheckToRunning(logger *bullets.UpdatableLogger
 	// Stop any existing handle if present
 	if handle, exists := ct.getHandle(checkID); exists {
 		handle.Update(bullets.InfoLevel, "") // Clear the line
-		ct.mu.Lock()
-		delete(ct.handles, checkID)
-		ct.mu.Unlock()
+		ct.handles.Delete(checkID)
 	}
 
 	// Create new animated spinner (only if doesn't exist)
-	spinner := logger.SpinnerCircle(context.Background(), statusText)
+	spinner := logger.SpinnerCircle(ct.ctx, statusText)
 	ct.setSpinner(checkID, spinner)
 
 	// Start time update loop for this spinner
@@ -300,7 +292,13 @@ func (ct *checkTracker) updateSpinnerLoop(checkID int64, spinner *bullets.Spinne
 	ticker := time.NewTicker(spinnerUpdateInterval)
 	defer ticker.Stop()
 
-	for range ticker.C {
+	for {
+		select {
+		case <-ct.ctx.Done():
+			return
+		case <-ticker.C:
+		}
+
 		check, exists := ct.getCheck(checkID)
 
 		// Stop if check no longer exists
@@ -323,6 +321,3 @@ func (ct *checkTracker) updateSpinnerLoop(checkID int64, spinner *bullets.Spinne
 		spinner.UpdateText(statusText)
 	}
 }
-
-// Ensure checkTracker implements StateTracker interface at compile time.
-var _ StateTracker = (*checkTracker)(nil)

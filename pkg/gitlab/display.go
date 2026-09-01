@@ -12,19 +12,15 @@ import (
 // displayRenderer implements display operations using bullets library.
 // It provides UI rendering capabilities with proper resource management.
 type displayRenderer struct {
-	logger         *bullets.Logger
-	updatable      *bullets.UpdatableLogger
-	activeSpinners map[int]*bullets.Spinner      // Track active spinners for cleanup
-	activeHandles  map[int]*bullets.BulletHandle // Track active handles for cleanup
+	logger    *bullets.Logger
+	updatable *bullets.UpdatableLogger
 }
 
 // newDisplayRenderer creates a new display renderer wrapping bullets library.
 func newDisplayRenderer(logger *bullets.Logger, updatable *bullets.UpdatableLogger) *displayRenderer {
 	return &displayRenderer{
-		logger:         logger,
-		updatable:      updatable,
-		activeSpinners: make(map[int]*bullets.Spinner),
-		activeHandles:  make(map[int]*bullets.BulletHandle),
+		logger:    logger,
+		updatable: updatable,
 	}
 }
 
@@ -84,18 +80,6 @@ func (d *displayRenderer) IncreasePadding() {
 // DecreasePadding decreases the indentation level for nested output.
 func (d *displayRenderer) DecreasePadding() {
 	d.updatable.DecreasePadding()
-}
-
-// Cleanup stops all active spinners and clears handles.
-// This should be called when the display is no longer needed.
-func (d *displayRenderer) Cleanup() {
-	for _, spinner := range d.activeSpinners {
-		if spinner != nil {
-			spinner.Stop()
-		}
-	}
-	d.activeSpinners = make(map[int]*bullets.Spinner)
-	d.activeHandles = make(map[int]*bullets.BulletHandle)
 }
 
 // formatJobStatus formats a job status with duration.

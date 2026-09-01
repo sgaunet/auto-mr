@@ -6,16 +6,18 @@
 //     to match shell script behavior and prevent silent data loss
 //
 // Authentication is determined automatically from the remote URL:
-//   - HTTPS URLs: uses GITLAB_TOKEN or GITHUB_TOKEN environment variables
+//   - HTTPS URLs: uses GITLAB_TOKEN, GITHUB_TOKEN or FORGEJO_TOKEN, selected by an
+//     exact match on the remote's hostname. A token is never sent to a host other
+//     than the one that issued it, and FORGEJO_TOKEN requires [WithForgejoURL].
 //   - SSH URLs: tries SSH agent first, then key files (~/.ssh/id_ed25519, id_rsa, id_ecdsa)
 //
 // Usage:
 //
-//	repo, err := git.OpenRepository(".")
+//	repo, err := git.OpenRepository(".", git.WithForgejoURL(cfg.Forgejo.URL))
 //	repo.SetLogger(logger)
 //	branch, _ := repo.GetCurrentBranch()
 //	platform, _ := repo.DetectPlatform("https://git.example.com")
-//	repo.PushBranch(branch)
+//	repo.PushBranch(ctx, branch)
 //
 // Thread Safety: [Repository] is not safe for concurrent use.
 package git
@@ -26,7 +28,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"net/url"
 	"strings"
 	"time"
 
@@ -39,12 +40,20 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/transport/ssh"
 	"github.com/sgaunet/auto-mr/internal/logger"
 	"github.com/sgaunet/auto-mr/internal/security"
+	"github.com/sgaunet/auto-mr/internal/urlutil"
 	"github.com/sgaunet/bullets"
 	gossh "golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
 )
 
 const (
+	// gitLabHost and gitHubHost are the only hostnames these platforms are served
+	// from. They are compared for exact equality: self-hosted GitLab and GitHub
+	// Enterprise are not supported (there is no configuration for their API base
+	// URL), so a lookalike host must fail closed rather than borrow their tokens.
+	gitLabHost = "gitlab.com"
+	gitHubHost = "github.com"
+
 	// localGitTimeout for local git operations (switch, delete).
 	localGitTimeout = 10 * time.Second
 
@@ -162,8 +171,13 @@ func findGitRoot(startPath string) (string, error) {
 //   - path: any path within the git repository (absolute or relative)
 //
 // Returns an error if the path is not within a git repository or authentication setup fails.
-func OpenRepository(path string) (*Repository, error) {
+func OpenRepository(path string, opts ...Option) (*Repository, error) {
 	noLog := logger.NoLogger()
+
+	var options openOptions
+	for _, opt := range opts {
+		opt(&options)
+	}
 
 	// Find git repository root
 	gitRoot, err := findGitRoot(path)
@@ -184,7 +198,7 @@ func OpenRepository(path string) (*Repository, error) {
 		gitRoot: gitRoot,
 		log:     noLog,
 	}
-	auth, err := getAuth(repo, noLog)
+	auth, err := getAuth(repo, noLog, options.forgejoURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to setup authentication: %w", err)
 	}
@@ -207,8 +221,26 @@ func (r *Repository) SetLogger(logger *bullets.Logger) {
 	r.log.Debug("Opening git repository")
 }
 
+// Option configures [OpenRepository].
+type Option func(*openOptions)
+
+// openOptions holds settings supplied to [OpenRepository] via [Option] values.
+type openOptions struct {
+	forgejoURL string
+}
+
+// WithForgejoURL scopes Forgejo authentication to a specific instance.
+//
+// Authentication is resolved while the repository is being opened, so the instance
+// URL has to be supplied here rather than through a setter — by the time a setter
+// could run, the credential has already been chosen. Without this option
+// FORGEJO_TOKEN is never attached to any remote.
+func WithForgejoURL(url string) Option {
+	return func(o *openOptions) { o.forgejoURL = url }
+}
+
 // getAuth determines the appropriate authentication method based on the remote URL.
-func getAuth(repo *git.Repository, logger *bullets.Logger) (*authMethod, error) {
+func getAuth(repo *git.Repository, logger *bullets.Logger, forgejoURL string) (*authMethod, error) {
 	remote, err := repo.Remote("origin")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get origin remote: %w", err)
@@ -224,7 +256,7 @@ func getAuth(repo *git.Repository, logger *bullets.Logger) (*authMethod, error) 
 
 	// Check if it's an HTTPS URL and if tokens are available
 	if strings.HasPrefix(url, "https://") {
-		return getHTTPSAuth(url, logger)
+		return getHTTPSAuth(url, logger, forgejoURL)
 	}
 
 	// For SSH URLs, setup SSH authentication
@@ -236,51 +268,51 @@ func getAuth(repo *git.Repository, logger *bullets.Logger) (*authMethod, error) 
 	return &authMethod{method: &noAuthMethod{}}, nil // No authentication needed
 }
 
-// getHTTPSAuth returns HTTP authentication for HTTPS URLs.
-func getHTTPSAuth(url string, logger *bullets.Logger) (*authMethod, error) {
+// getHTTPSAuth returns HTTP authentication for an HTTPS remote URL.
+//
+// A token is attached only when the remote's hostname matches exactly the platform
+// that issued it: gitlab.com, github.com, or the host of the configured Forgejo
+// instance. Every other host — including lookalikes such as gitlab.com.example and
+// remotes whose path merely mentions a known host — gets no credential at all.
+//
+// Returning no-auth rather than an error is deliberate: go-git must still be able to
+// reach public repositories that need no authentication.
+func getHTTPSAuth(url string, logger *bullets.Logger, forgejoURL string) (*authMethod, error) {
+	host := urlutil.Host(url)
+
 	switch {
-	case strings.Contains(url, "gitlab.com"):
-		if tokenStr := os.Getenv("GITLAB_TOKEN"); tokenStr != "" {
-			token := security.NewSecureToken(tokenStr)
-			security.DebugAuth(logger, "GitLab", map[string]string{
-				debugAuthMethod: debugAuthToken,
-				debugAuthURL:    url,
-			})
-			return &authMethod{method: &http.BasicAuth{
-				Username: "oauth2",
-				Password: token.Value(), // Extract actual token only for authentication
-			}}, nil
-		}
-		logger.Debug("GITLAB_TOKEN not found")
-	case strings.Contains(url, "github.com"):
-		if tokenStr := os.Getenv("GITHUB_TOKEN"); tokenStr != "" {
-			token := security.NewSecureToken(tokenStr)
-			security.DebugAuth(logger, "GitHub", map[string]string{
-				debugAuthMethod: debugAuthToken,
-				debugAuthURL:    url,
-			})
-			return &authMethod{method: &http.BasicAuth{
-				Username: "x-access-token",
-				Password: token.Value(), // Extract actual token only for authentication
-			}}, nil
-		}
-		logger.Debug("GITHUB_TOKEN not found")
-	default:
-		// Forgejo / self-hosted Gitea: any URL that is neither gitlab.com nor github.com.
-		if tokenStr := os.Getenv("FORGEJO_TOKEN"); tokenStr != "" {
-			token := security.NewSecureToken(tokenStr)
-			security.DebugAuth(logger, "Forgejo", map[string]string{
-				debugAuthMethod: debugAuthToken,
-				debugAuthURL:    url,
-			})
-			return &authMethod{method: &http.BasicAuth{
-				Username: "forgejo",
-				Password: token.Value(), // Extract actual token only for authentication
-			}}, nil
-		}
-		logger.Debug("FORGEJO_TOKEN not found")
+	case host == gitLabHost:
+		return tokenAuth(logger, url, "GitLab", "GITLAB_TOKEN", "oauth2"), nil
+	case host == gitHubHost:
+		return tokenAuth(logger, url, "GitHub", "GITHUB_TOKEN", "x-access-token"), nil
+	case forgejoURL != "" && host != "" && host == urlutil.Host(forgejoURL):
+		return tokenAuth(logger, url, "Forgejo", "FORGEJO_TOKEN", "forgejo"), nil
 	}
-	return &authMethod{method: &noAuthMethod{}}, nil // No token available, try without auth
+
+	logger.Debug("No token configured for remote host; continuing without authentication")
+	return &authMethod{method: &noAuthMethod{}}, nil
+}
+
+// tokenAuth builds HTTP basic auth from the named environment variable, or no-auth
+// when that variable is unset. The value is trimmed because tokens are frequently
+// sourced via command substitution, which leaves a trailing newline that would
+// otherwise be sent as part of the credential.
+func tokenAuth(logger *bullets.Logger, url, platform, envVar, username string) *authMethod {
+	tokenStr := strings.TrimSpace(os.Getenv(envVar))
+	if tokenStr == "" {
+		logger.Debug(envVar + " not found")
+		return &authMethod{method: &noAuthMethod{}}
+	}
+
+	token := security.NewSecureToken(tokenStr)
+	security.DebugAuth(logger, platform, map[string]string{
+		debugAuthMethod: debugAuthToken,
+		debugAuthURL:    url,
+	})
+	return &authMethod{method: &http.BasicAuth{
+		Username: username,
+		Password: token.Value(), // Extract actual token only for authentication.
+	}}
 }
 
 // setupSSHAuth configures SSH authentication using the user's SSH keys.
@@ -440,39 +472,21 @@ func (r *Repository) DetectPlatform(forgejoURL string) (Platform, error) {
 		return "", errNoRemoteURLs
 	}
 
-	remoteURL := urls[0]
-	if strings.Contains(remoteURL, "gitlab.com") {
-		return PlatformGitLab, nil
-	}
-	if strings.Contains(remoteURL, "github.com") {
-		return PlatformGitHub, nil
-	}
+	// Compare hostnames exactly. Substring matching would let a crafted remote such
+	// as "https://gitlab.com.evil.example/x.git" impersonate a known platform, and an
+	// unparseable remote yields "" so it matches nothing and fails closed.
+	host := urlutil.Host(urls[0])
 
-	if forgejoURL != "" {
-		host := extractHost(forgejoURL)
-		if host != "" && strings.Contains(remoteURL, host) {
-			return PlatformForgejo, nil
-		}
+	switch {
+	case host == gitLabHost:
+		return PlatformGitLab, nil
+	case host == gitHubHost:
+		return PlatformGitHub, nil
+	case forgejoURL != "" && host != "" && host == urlutil.Host(forgejoURL):
+		return PlatformForgejo, nil
 	}
 
 	return "", errUnsupportedPlatform
-}
-
-// extractHost returns the hostname from a URL string.
-// It uses net/url.Parse; if that fails or yields no host, it strips the scheme
-// prefix as a fallback.
-func extractHost(rawURL string) string {
-	parsed, err := url.Parse(rawURL)
-	if err == nil && parsed.Host != "" {
-		return parsed.Host
-	}
-	// Fallback: strip scheme (e.g. "https://") manually.
-	_, remainder, found := strings.Cut(rawURL, "://")
-	if !found {
-		return rawURL
-	}
-	host, _, _ := strings.Cut(remainder, "/")
-	return host
 }
 
 // PushBranch pushes the specified branch to the origin remote.
@@ -481,12 +495,19 @@ func extractHost(rawURL string) string {
 // If the branch is already up to date, no error is returned.
 //
 // Parameters:
+//   - ctx: context for cancellation (further bounded by networkGitTimeout)
 //   - branchName: the local branch name to push
-func (r *Repository) PushBranch(branchName string) error {
+func (r *Repository) PushBranch(ctx context.Context, branchName string) error {
 	r.log.Debug("Pushing branch: " + branchName)
 
-	// Priority 1: Try go-git push
-	err := r.repo.Push(&git.PushOptions{
+	// Priority 1: Try go-git push. PushContext is required rather than Push, which
+	// go-git implements with context.Background() and therefore never bounds: a
+	// stalled transport would block here forever and never reach the native git
+	// fallback below, which is itself bounded by networkGitTimeout.
+	pushCtx, cancel := context.WithTimeout(ctx, networkGitTimeout)
+	defer cancel()
+
+	err := r.repo.PushContext(pushCtx, &git.PushOptions{
 		RemoteName: "origin",
 		RefSpecs: []config.RefSpec{
 			config.RefSpec("refs/heads/" + branchName + ":refs/heads/" + branchName),
@@ -500,7 +521,7 @@ func (r *Repository) PushBranch(branchName string) error {
 
 	// Priority 2: Fall back to native git push (uses system SSH agent/config)
 	r.log.Debug("go-git push failed, falling back to native git: " + err.Error())
-	return r.pushBranchViaNativeGit(branchName)
+	return r.pushBranchViaNativeGit(ctx, branchName)
 }
 
 // SwitchBranch switches to the specified branch using native "git switch".
@@ -521,7 +542,7 @@ func (r *Repository) SwitchBranch(ctx context.Context, branchName string) error 
 	ctx, cancel := context.WithTimeout(ctx, localGitTimeout)
 	defer cancel()
 
-	cmd := r.gitCommand(ctx, "switch", branchName)
+	cmd := r.gitCommand(ctx, "switch", "--", branchName)
 	output, err := cmd.CombinedOutput()
 
 	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
@@ -588,7 +609,7 @@ func (r *Repository) DeleteBranch(ctx context.Context, branchName string) error 
 	ctx, cancel := context.WithTimeout(ctx, localGitTimeout)
 	defer cancel()
 
-	cmd := r.gitCommand(ctx, "branch", "-D", branchName)
+	cmd := r.gitCommand(ctx, "branch", "-D", "--", branchName)
 	output, err := cmd.CombinedOutput()
 
 	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
@@ -782,11 +803,11 @@ func (r *Repository) getMainBranchViaNativeGit() (string, error) {
 // pushBranchViaNativeGit pushes a branch using native git push.
 // This uses the system's SSH binary and agent, which handles more SSH configurations
 // than go-git's built-in SSH implementation.
-func (r *Repository) pushBranchViaNativeGit(branchName string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), networkGitTimeout)
+func (r *Repository) pushBranchViaNativeGit(ctx context.Context, branchName string) error {
+	ctx, cancel := context.WithTimeout(ctx, networkGitTimeout)
 	defer cancel()
 
-	cmd := r.gitCommand(ctx, "push", "-u", "origin", branchName)
+	cmd := r.gitCommand(ctx, "push", "-u", "origin", "--", branchName)
 	output, err := cmd.CombinedOutput()
 
 	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {

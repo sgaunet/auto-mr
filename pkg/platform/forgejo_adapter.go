@@ -1,6 +1,7 @@
 package platform
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"time"
@@ -13,13 +14,13 @@ import (
 // ForgejoAdapter wraps a Forgejo client to implement the [Provider] interface.
 // It translates between the platform-agnostic types and the Forgejo-specific API.
 type ForgejoAdapter struct {
-	client *forgejo.Client
+	client forgejo.APIClient
 	cfg    config.ForgejoConfig
 	log    *bullets.Logger
 }
 
 // NewForgejoAdapter creates a new Forgejo adapter.
-func NewForgejoAdapter(client *forgejo.Client, cfg config.ForgejoConfig, log *bullets.Logger) *ForgejoAdapter {
+func NewForgejoAdapter(client forgejo.APIClient, cfg config.ForgejoConfig, log *bullets.Logger) *ForgejoAdapter {
 	return &ForgejoAdapter{
 		client: client,
 		cfg:    cfg,
@@ -28,16 +29,16 @@ func NewForgejoAdapter(client *forgejo.Client, cfg config.ForgejoConfig, log *bu
 }
 
 // Initialize sets up the Forgejo repository from a remote URL.
-func (a *ForgejoAdapter) Initialize(remoteURL string) error {
-	if err := a.client.SetRepositoryFromURL(remoteURL); err != nil {
+func (a *ForgejoAdapter) Initialize(ctx context.Context, remoteURL string) error {
+	if err := a.client.SetRepositoryFromURL(ctx, remoteURL); err != nil {
 		return fmt.Errorf("failed to set Forgejo repository: %w", err)
 	}
 	return nil
 }
 
 // ListLabels returns all available labels, converted to platform-agnostic format.
-func (a *ForgejoAdapter) ListLabels() ([]Label, error) {
-	fjLabels, err := a.client.ListLabels()
+func (a *ForgejoAdapter) ListLabels(ctx context.Context) ([]Label, error) {
+	fjLabels, err := a.client.ListLabels(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list Forgejo labels: %w", err)
 	}
@@ -50,8 +51,8 @@ func (a *ForgejoAdapter) ListLabels() ([]Label, error) {
 }
 
 // Create creates a new pull request on Forgejo.
-func (a *ForgejoAdapter) Create(params CreateParams) (*MergeRequest, error) {
-	pr, err := a.client.CreatePullRequest(
+func (a *ForgejoAdapter) Create(ctx context.Context, params CreateParams) (*MergeRequest, error) {
+	pr, err := a.client.CreatePullRequest(ctx,
 		params.SourceBranch, params.TargetBranch,
 		params.Title, params.Body,
 		a.cfg.Assignee, a.cfg.Reviewer,
@@ -72,8 +73,8 @@ func (a *ForgejoAdapter) Create(params CreateParams) (*MergeRequest, error) {
 }
 
 // GetByBranch fetches an existing pull request by source and target branches.
-func (a *ForgejoAdapter) GetByBranch(sourceBranch, targetBranch string) (*MergeRequest, error) {
-	pr, err := a.client.GetPullRequestByBranch(sourceBranch, targetBranch)
+func (a *ForgejoAdapter) GetByBranch(ctx context.Context, sourceBranch, targetBranch string) (*MergeRequest, error) {
+	pr, err := a.client.GetPullRequestByBranch(ctx, sourceBranch, targetBranch)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get pull request by branch: %w", err)
 	}
@@ -86,8 +87,8 @@ func (a *ForgejoAdapter) GetByBranch(sourceBranch, targetBranch string) (*MergeR
 }
 
 // WaitForPipeline waits for Forgejo Actions / commit-status CI completion.
-func (a *ForgejoAdapter) WaitForPipeline(timeout time.Duration) (string, error) {
-	status, err := a.client.WaitForPipeline(timeout)
+func (a *ForgejoAdapter) WaitForPipeline(ctx context.Context, timeout time.Duration) (string, error) {
+	status, err := a.client.WaitForPipeline(ctx, timeout)
 	if err != nil {
 		return "", fmt.Errorf("failed to wait for Forgejo pipeline: %w", err)
 	}
@@ -95,14 +96,14 @@ func (a *ForgejoAdapter) WaitForPipeline(timeout time.Duration) (string, error) 
 }
 
 // Approve is a no-op for Forgejo (Forgejo doesn't gate merges on approval).
-func (a *ForgejoAdapter) Approve(_ int64) error {
+func (a *ForgejoAdapter) Approve(_ context.Context, _ int64) error {
 	return nil
 }
 
 // Merge merges a Forgejo pull request.
 // Branch deletion is handled inside the client via DeleteBranchAfterMerge.
-func (a *ForgejoAdapter) Merge(params MergeParams) error {
-	if err := a.client.MergePullRequest(params.MRID, params.Squash, params.CommitTitle); err != nil {
+func (a *ForgejoAdapter) Merge(ctx context.Context, params MergeParams) error {
+	if err := a.client.MergePullRequest(ctx, params.MRID, params.Squash, params.CommitTitle); err != nil {
 		return fmt.Errorf("failed to merge pull request: %w", err)
 	}
 	return nil

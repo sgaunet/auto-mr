@@ -7,7 +7,7 @@ import (
 	"github.com/sgaunet/auto-mr/testing/fixtures"
 )
 
-// T010 [P] [US1] Test Commit.IsValid() method
+// T010 [P] [US1] Test Commit.IsValid() method.
 func TestCommit_IsValid(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -41,7 +41,7 @@ func TestCommit_IsValid(t *testing.T) {
 	}
 }
 
-// T011 [P] [US1] Test Commit.IsMergeCommit() method
+// T011 [P] [US1] Test Commit.IsMergeCommit() method.
 func TestCommit_IsMergeCommit(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -70,7 +70,7 @@ func TestCommit_IsMergeCommit(t *testing.T) {
 	}
 }
 
-// T012 [P] [US1] Test Commit.TitleTruncated() method
+// T012 [P] [US1] Test Commit.TitleTruncated() method.
 func TestCommit_TitleTruncated(t *testing.T) {
 	const shortMaxLen = 50
 	const longMaxLen = 20
@@ -107,16 +107,14 @@ func TestCommit_TitleTruncated(t *testing.T) {
 				if got[len(got)-3:] != "..." {
 					t.Errorf("TitleTruncated(%d) = %q, expected to end with '...'", tt.maxLen, got)
 				}
-			} else {
-				if got != tt.commit.Title {
-					t.Errorf("TitleTruncated(%d) = %q, want %q", tt.maxLen, got, tt.commit.Title)
-				}
+			} else if got != tt.commit.Title {
+				t.Errorf("TitleTruncated(%d) = %q, want %q", tt.maxLen, got, tt.commit.Title)
 			}
 		})
 	}
 }
 
-// T013 [P] [US1] Test Commit.FormattedForDisplay() method
+// T013 [P] [US1] Test Commit.FormattedForDisplay() method.
 func TestCommit_FormattedForDisplay(t *testing.T) {
 	const displayMaxLen = 80
 
@@ -141,7 +139,7 @@ func TestCommit_FormattedForDisplay(t *testing.T) {
 	}
 }
 
-// T014 [P] [US1] Test CommitList.Count() method
+// T014 [P] [US1] Test CommitList.Count() method.
 func TestCommitList_Count(t *testing.T) {
 	const expectedValidCount = 2
 
@@ -153,13 +151,13 @@ func TestCommitList_Count(t *testing.T) {
 	}
 }
 
-// T015 [P] [US1] Test CommitList.HasSingleCommit() and HasMultipleCommits() methods
+// T015 [P] [US1] Test CommitList.HasSingleCommit() and HasMultipleCommits() methods.
 func TestCommitList_HasSingleCommit(t *testing.T) {
 	tests := []struct {
-		name             string
-		commitList       commits.CommitList
-		expectSingle     bool
-		expectMultiple   bool
+		name           string
+		commitList     commits.CommitList
+		expectSingle   bool
+		expectMultiple bool
 	}{
 		{
 			name: "single commit",
@@ -200,7 +198,7 @@ func TestCommitList_HasSingleCommit(t *testing.T) {
 	}
 }
 
-// T016 [P] [US1] Test CommitList.IsEmpty() method
+// T016 [P] [US1] Test CommitList.IsEmpty() method.
 func TestCommitList_IsEmpty(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -231,7 +229,7 @@ func TestCommitList_IsEmpty(t *testing.T) {
 	}
 }
 
-// Helper functions
+// Helper functions.
 func contains(s, substr string) bool {
 	for i := 0; i <= len(s)-len(substr); i++ {
 		if s[i:i+len(substr)] == substr {

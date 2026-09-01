@@ -25,6 +25,7 @@ package github
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -32,6 +33,7 @@ import (
 
 	"github.com/google/go-github/v69/github"
 	"github.com/sgaunet/auto-mr/internal/logger"
+	"github.com/sgaunet/auto-mr/internal/polling"
 	"github.com/sgaunet/auto-mr/internal/timeutil"
 	"github.com/sgaunet/bullets"
 	"golang.org/x/oauth2"
@@ -40,13 +42,12 @@ import (
 // NewClient creates a new GitHub client authenticated via the GITHUB_TOKEN environment variable.
 //
 // Returns [ErrTokenRequired] if GITHUB_TOKEN is not set.
-func NewClient() (*Client, error) {
+func NewClient(ctx context.Context) (*Client, error) {
 	token := strings.TrimSpace(os.Getenv("GITHUB_TOKEN"))
 	if token == "" {
 		return nil, errTokenRequired
 	}
 
-	ctx := context.Background()
 	ts := oauth2.StaticTokenSource(
 		&oauth2.Token{AccessToken: token},
 	)
@@ -82,83 +83,138 @@ func (c *Client) SetLogger(logger *bullets.Logger) {
 // Returns [ErrWorkflowTimeout] if the timeout is exceeded.
 //
 // A pull request must have been created or fetched before calling this method.
-func (c *Client) WaitForWorkflows(timeout time.Duration) (string, error) {
+func (c *Client) WaitForWorkflows(ctx context.Context, timeout time.Duration) (string, error) {
 	c.log.Debug(fmt.Sprintf("Waiting for workflows, timeout: %v", timeout))
 	start := time.Now()
 
+	// The overall budget bounds the whole wait; each request additionally gets a short
+	// deadline of its own, so one stalled response cannot consume the entire budget.
+	// Only overallCtx can tell "this request stalled, poll again" from "the budget is
+	// spent", because a per-request context derived from it fails in both cases.
+	overallCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
 	// First check if any workflow runs are expected for this PR
-	if !c.hasWorkflowRuns() {
+	if !c.hasWorkflowRuns(overallCtx) {
 		c.log.Info("No workflow runs configured for this pull request, proceeding without checks")
 		return conclusionSuccess, nil
 	}
 
 	// Create updatable handle for workflow status
 	c.display.Info("Waiting for workflows to complete...")
-	time.Sleep(workflowCreationDelay) // Let the time to workflows to be created
+	if !polling.Sleep(overallCtx, workflowCreationDelay) { // Let the time to workflows to be created
+		return "", waitOutcome(overallCtx)
+	}
 	c.display.IncreasePadding()
 	defer c.display.DecreasePadding()
 
 	// Initialize check tracker for managing individual job handles
-	tracker := newCheckTracker()
+	tracker := newCheckTracker(overallCtx)
+	defer tracker.Stop()
 
-	for time.Since(start) < timeout {
-		checkRuns, _, err := c.client.Checks.ListCheckRunsForRef(
-			c.ctx(), c.owner, c.repo, c.prSHA,
-			&github.ListCheckRunsOptions{
-				ListOptions: github.ListOptions{PerPage: maxCheckRunsPerPage},
-			},
-		)
+	for overallCtx.Err() == nil {
+		conclusion, done, err := c.pollWorkflowsOnce(overallCtx, tracker)
 		if err != nil {
-			c.display.Error(fmt.Sprintf("Failed to list check runs: %v", err))
-			return "", fmt.Errorf("failed to list check runs: %w", err)
+			if overallCtx.Err() != nil {
+				break // Budget spent or cancelled; reported after the loop.
+			}
+			if !isTransient(err) {
+				return "", err
+			}
+			// Rate limits and server-side faults are expected over a long wait; the
+			// next poll retries rather than abandoning a request whose CI may be
+			// about to pass.
+			c.log.Debug(fmt.Sprintf("Transient error while polling, will retry: %v", err))
+		} else if done {
+			c.reportWorkflowOutcome(conclusion, time.Since(start))
+			return conclusion, nil
 		}
-
-		if checkRuns.GetTotal() == 0 {
-			// Wait silently for workflows to appear (they'll show as individual spinners when they start)
-			time.Sleep(checkPollInterval)
-			continue
+		if !polling.Sleep(overallCtx, polling.DefaultSchedule.IntervalFor(time.Since(start))) {
+			break
 		}
-
-		// Try to fetch and display job-level information with check tracker
-		allCompleted, conclusion := c.processWorkflowsWithJobTracking(tracker)
-
-		if !allCompleted {
-			time.Sleep(checkPollInterval)
-			continue
-		}
-
-		// All workflows completed - display final summary
-		totalDuration := time.Since(start)
-		if conclusion == conclusionSuccess {
-			c.display.Success("Workflows completed successfully - total time: " +
-				timeutil.FormatDuration(totalDuration))
-		} else {
-			msg := "Workflows failed - total time: " +
-				timeutil.FormatDuration(totalDuration)
-			handle := c.display.InfoHandle(msg)
-			handle.Error(msg)
-		}
-		return conclusion, nil
 	}
 
 	totalDuration := time.Since(start)
+	if errors.Is(overallCtx.Err(), context.Canceled) {
+		c.display.Error("Cancelled after " + timeutil.FormatDuration(totalDuration))
+		return "", errWorkflowCanceled
+	}
 	c.display.Error("Timeout after " + timeutil.FormatDuration(totalDuration))
 	return "", errWorkflowTimeout
 }
 
+// waitOutcome maps a finished wait context to the sentinel that describes why it
+// ended, so callers can distinguish a deliberate interrupt from a spent budget.
+func waitOutcome(ctx context.Context) error {
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return errWorkflowCanceled
+	}
+	return errWorkflowTimeout
+}
+
+// pollWorkflowsOnce performs a single polling round, bounded by its own short
+// deadline so a stalled request cannot consume the overall budget.
+//
+// It reports the overall conclusion and whether every workflow has reached a
+// terminal state. An error accompanied by a finished overallCtx means the wait
+// itself ended rather than the request failing, and the caller distinguishes those.
+func (c *Client) pollWorkflowsOnce(
+	overallCtx context.Context, tracker *checkTracker,
+) (string, bool, error) {
+	pollCtx, cancelPoll := context.WithTimeout(overallCtx, polling.PerCallTimeout)
+	defer cancelPoll()
+
+	checkRuns, _, err := c.client.Checks.ListCheckRunsForRef(
+		pollCtx, c.owner, c.repo, c.prSHA,
+		&github.ListCheckRunsOptions{
+			ListOptions: github.ListOptions{PerPage: maxCheckRunsPerPage},
+		},
+	)
+	if err != nil {
+		if overallCtx.Err() == nil && !isTransient(err) {
+			c.display.Error(fmt.Sprintf("Failed to list check runs: %v", err))
+		}
+		return "", false, fmt.Errorf("failed to list check runs: %w", err)
+	}
+
+	// Wait silently for workflows to appear; they show as individual spinners once
+	// they start.
+	if checkRuns.GetTotal() == 0 {
+		return "", false, nil
+	}
+
+	allCompleted, conclusion := c.processWorkflowsWithJobTracking(pollCtx, tracker, checkRuns)
+	return conclusion, allCompleted, nil
+}
+
+// reportWorkflowOutcome renders the final summary line for finished workflows.
+func (c *Client) reportWorkflowOutcome(conclusion string, elapsed time.Duration) {
+	if conclusion == conclusionSuccess {
+		c.display.Success("Workflows completed successfully - total time: " +
+			timeutil.FormatDuration(elapsed))
+		return
+	}
+
+	msg := "Workflows failed - total time: " + timeutil.FormatDuration(elapsed)
+	handle := c.display.InfoHandle(msg)
+	handle.Error(msg)
+}
+
 // processWorkflowsWithJobTracking processes workflows using checkTracker for individual job display.
-func (c *Client) processWorkflowsWithJobTracking(tracker *checkTracker) (bool, string) {
+func (c *Client) processWorkflowsWithJobTracking(
+	ctx context.Context, tracker *checkTracker, checkRuns *github.ListCheckRunsResults,
+) (bool, string) {
 	// Try to fetch workflow jobs
-	jobs, err := c.fetchWorkflowJobs()
+	jobs, err := c.fetchWorkflowJobs(ctx)
 	if err != nil {
 		c.log.Debug(fmt.Sprintf("Failed to fetch workflow jobs, falling back to check runs: %v", err))
-		return c.fallbackToCheckRuns(tracker)
+		return c.checkRunsFallback(tracker, checkRuns)
 	}
 
 	// If no jobs found, fall back to check runs
 	if len(jobs) == 0 {
 		c.log.Debug("No workflow jobs found, falling back to check runs")
-		return c.fallbackToCheckRuns(tracker)
+		return c.checkRunsFallback(tracker, checkRuns)
 	}
 
 	// Update check tracker with new jobs (creates/updates handles automatically)
@@ -172,17 +228,13 @@ func (c *Client) processWorkflowsWithJobTracking(tracker *checkTracker) (bool, s
 }
 
 // fallbackToCheckRuns attempts to fall back to check runs API.
-func (c *Client) fallbackToCheckRuns(tracker *checkTracker) (bool, string) {
-	checkRuns, _, err := c.client.Checks.ListCheckRunsForRef(
-		c.ctx(), c.owner, c.repo, c.prSHA,
-		&github.ListCheckRunsOptions{
-			ListOptions: github.ListOptions{PerPage: maxCheckRunsPerPage},
-		},
-	)
-	if err == nil && checkRuns.GetTotal() > 0 {
-		return c.processCheckRunsFallback(tracker, checkRuns.CheckRuns)
+func (c *Client) checkRunsFallback(
+	tracker *checkTracker, checkRuns *github.ListCheckRunsResults,
+) (bool, string) {
+	if checkRuns == nil || checkRuns.GetTotal() == 0 {
+		return false, ""
 	}
-	return false, ""
+	return c.processCheckRunsFallback(tracker, checkRuns.CheckRuns)
 }
 
 // analyzeJobCompletion checks if all jobs are completed and determines overall conclusion.
@@ -273,4 +325,26 @@ func calculateJobDuration(job *JobInfo) string {
 		return timeutil.FormatDuration(elapsed)
 	}
 	return ""
+}
+
+// isTransient reports whether an error from the GitHub API is worth retrying.
+//
+// go-github models rate limiting with dedicated types and everything else with
+// ErrorResponse, so both shapes have to be inspected to recover the status code.
+func isTransient(err error) bool {
+	var rateLimit *github.RateLimitError
+	if errors.As(err, &rateLimit) {
+		return true
+	}
+
+	var abuse *github.AbuseRateLimitError
+	if errors.As(err, &abuse) {
+		return true
+	}
+
+	var errResp *github.ErrorResponse
+	if errors.As(err, &errResp) && errResp.Response != nil {
+		return polling.Transient(errResp.Response.StatusCode)
+	}
+	return false
 }

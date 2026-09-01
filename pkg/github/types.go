@@ -1,10 +1,11 @@
 package github
 
 import (
-	"sync"
+	"context"
 	"time"
 
 	"github.com/google/go-github/v69/github"
+	"github.com/sgaunet/auto-mr/internal/trackmap"
 	"github.com/sgaunet/bullets"
 )
 
@@ -13,7 +14,6 @@ const (
 	minURLParts            = 2
 	maxCheckRunsPerPage    = 100
 	maxJobDetailsToDisplay = 3
-	checkPollInterval      = 5 * time.Second
 	spinnerUpdateInterval  = 1 * time.Second
 	workflowCreationDelay  = 5 * time.Second
 	conclusionSuccess      = "success"
@@ -30,13 +30,13 @@ const (
 //
 // Not safe for concurrent use.
 type Client struct {
-	client  *github.Client
-	owner   string
-	repo    string
+	client   *github.Client
+	owner    string
+	repo     string
 	prNumber int
-	prSHA   string
-	log     *bullets.Logger
-	display *displayRenderer // Display renderer for UI output
+	prSHA    string
+	log      *bullets.Logger
+	display  *displayRenderer // Display renderer for UI output
 }
 
 // Label represents a GitHub label.
@@ -59,8 +59,16 @@ type JobInfo struct {
 
 // checkTracker tracks workflow jobs/checks and their display handles with thread-safe access.
 type checkTracker struct {
-	mu       sync.RWMutex
-	checks   map[int64]*JobInfo
-	handles  map[int64]*bullets.BulletHandle
-	spinners map[int64]*bullets.Spinner // Spinners for running jobs
+	// ctx scopes the spinners and refresh goroutines this tracker owns; cancel is
+	// invoked by Stop to tear them down deterministically.
+	//
+	//nolint:containedctx // The tracker is a scoped worker created per wait and torn
+	// down by Stop, and bullets.SpinnerCircle requires a context to stop its
+	// animation, so the lifetime is owned here rather than passed per call.
+	ctx    context.Context
+	cancel context.CancelFunc
+
+	checks   *trackmap.Map[int64, *JobInfo]
+	handles  *trackmap.Map[int64, *bullets.BulletHandle]
+	spinners *trackmap.Map[int64, *bullets.Spinner] // Spinners for running jobs
 }

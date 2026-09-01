@@ -1,9 +1,10 @@
 package gitlab
 
 import (
-	"sync"
+	"context"
 	"time"
 
+	"github.com/sgaunet/auto-mr/internal/trackmap"
 	"github.com/sgaunet/bullets"
 	gitlab "gitlab.com/gitlab-org/api/client-go"
 )
@@ -11,7 +12,6 @@ import (
 // Constants for GitLab API operations.
 const (
 	minURLParts            = 2
-	pipelinePollInterval   = 5 * time.Second
 	spinnerUpdateInterval  = 1 * time.Second
 	maxJobDetailsToDisplay = 3
 	statusSuccess          = "success"
@@ -59,8 +59,16 @@ type Job struct {
 
 // jobTracker tracks jobs and their display handles/spinners with thread-safe access.
 type jobTracker struct {
-	mu       sync.RWMutex
-	jobs     map[int64]*Job
-	handles  map[int64]*bullets.BulletHandle
-	spinners map[int64]*bullets.Spinner
+	// ctx scopes the spinners and refresh goroutines this tracker owns; cancel is
+	// invoked by Stop to tear them down deterministically.
+	//
+	//nolint:containedctx // The tracker is a scoped worker created per wait and torn
+	// down by Stop, and bullets.SpinnerCircle requires a context to stop its
+	// animation, so the lifetime is owned here rather than passed per call.
+	ctx    context.Context
+	cancel context.CancelFunc
+
+	jobs     *trackmap.Map[int64, *Job]
+	handles  *trackmap.Map[int64, *bullets.BulletHandle]
+	spinners *trackmap.Map[int64, *bullets.Spinner]
 }

@@ -1,6 +1,7 @@
 package git_test
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,7 +16,7 @@ import (
 	"github.com/sgaunet/auto-mr/pkg/git"
 )
 
-// initTestRepo creates a proper git repository using go-git with a remote origin
+// initTestRepo creates a proper git repository using go-git with a remote origin.
 func initTestRepo(t *testing.T, path string) {
 	t.Helper()
 	repo, err := gogit.PlainInit(path, false)
@@ -102,7 +103,7 @@ func hermeticGitEnv() []string {
 
 // gitCmd builds a native git command rooted at dir with a hermetic environment.
 func gitCmd(dir string, args ...string) *exec.Cmd {
-	cmd := exec.Command("git", args...)
+	cmd := exec.CommandContext(context.Background(), "git", args...)
 	cmd.Dir = dir
 	cmd.Env = hermeticGitEnv()
 	return cmd
@@ -568,5 +569,56 @@ func TestDetectPlatform_Forgejo_EmptyURL(t *testing.T) {
 	_, err = repo.DetectPlatform("")
 	if err == nil {
 		t.Fatal("Expected unsupported-platform error, got nil")
+	}
+}
+
+// TestDetectPlatform_HostSpoofing verifies that platform detection compares remote
+// hostnames exactly and fails closed on lookalikes.
+//
+// Detection runs before any authenticated network call, so it is the first line of
+// defense against a crafted remote; the auth path is covered independently in
+// git_security_test.go because pkg/git is a public package and the two are reachable
+// separately.
+func TestDetectPlatform_HostSpoofing(t *testing.T) {
+	const configuredForgejo = "https://git.example.com"
+
+	tests := []struct {
+		name       string
+		remoteURL  string
+		forgejoURL string
+	}{
+		{name: "gitlab_host_suffix", remoteURL: "https://gitlab.com.evil.example/owner/repo.git"},
+		{name: "gitlab_in_path", remoteURL: "https://evil.example/gitlab.com/repo.git"},
+		{name: "github_host_suffix", remoteURL: "https://github.com.evil.example/owner/repo.git"},
+		{name: "github_in_path", remoteURL: "https://evil.example/github.com/repo.git"},
+		{name: "gitlab_lookalike_subdomain", remoteURL: "https://gitlab.company.example/owner/repo.git"},
+		{
+			name:       "forgejo_host_suffix",
+			remoteURL:  "https://git.example.com.evil.example/owner/repo.git",
+			forgejoURL: configuredForgejo,
+		},
+		{
+			name:       "forgejo_host_in_path",
+			remoteURL:  "https://evil.example/git.example.com/repo.git",
+			forgejoURL: configuredForgejo,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			initTestRepoWithRemote(t, tmpDir, tt.remoteURL)
+
+			repo, err := git.OpenRepository(tmpDir)
+			if err != nil {
+				t.Fatalf("OpenRepository: %v", err)
+			}
+
+			platform, err := repo.DetectPlatform(tt.forgejoURL)
+			if err == nil {
+				t.Errorf("remote %q was detected as platform %q; expected it to be rejected",
+					tt.remoteURL, platform)
+			}
+		})
 	}
 }

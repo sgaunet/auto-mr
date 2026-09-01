@@ -4,6 +4,9 @@ import "github.com/sgaunet/auto-mr/pkg/platform"
 
 // Test constants for platform fixtures.
 const (
+	// TestCommitSHA is the head commit SHA shared by the platform fixtures.
+	TestCommitSHA = "abc123def456"
+
 	defaultMRID     = 42
 	defaultWebURL   = "https://example.com/owner/repo/-/merge_requests/42"
 	defaultSourceBr = "feature-branch"

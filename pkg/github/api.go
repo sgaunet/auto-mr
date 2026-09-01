@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/google/go-github/v69/github"
+	"github.com/sgaunet/auto-mr/internal/polling"
 	"github.com/sgaunet/auto-mr/internal/urlutil"
 )
 
@@ -16,7 +17,12 @@ import (
 //
 // Returns [ErrInvalidURLFormat] if the URL cannot be parsed into owner/repo.
 // Returns a wrapped error if the repository does not exist or the API call fails.
-func (c *Client) SetRepositoryFromURL(url string) error {
+func (c *Client) SetRepositoryFromURL(ctx context.Context, url string) error {
+	// Bound the operation so a stalled response cannot hang a caller whose own
+	// context carries no deadline.
+	ctx, cancel := context.WithTimeout(ctx, polling.PerCallTimeout)
+	defer cancel()
+
 	// Extract owner/repo from URL
 	// Supports both HTTPS and SSH formats:
 	// - https://github.com/owner/repo.git
@@ -38,7 +44,7 @@ func (c *Client) SetRepositoryFromURL(url string) error {
 
 	c.log.Debug(fmt.Sprintf("Setting GitHub repository: %s/%s", c.owner, c.repo))
 	// Validate repository exists
-	_, _, err := c.client.Repositories.Get(c.ctx(), c.owner, c.repo)
+	_, _, err := c.client.Repositories.Get(ctx, c.owner, c.repo)
 	if err != nil {
 		return fmt.Errorf("failed to get repository information: %w", err)
 	}
@@ -51,9 +57,14 @@ func (c *Client) SetRepositoryFromURL(url string) error {
 // [Client.SetRepositoryFromURL] must be called before this method.
 //
 // Returns an empty slice if no labels are configured.
-func (c *Client) ListLabels() ([]*Label, error) {
+func (c *Client) ListLabels(ctx context.Context) ([]*Label, error) {
+	// Bound the operation so a stalled response cannot hang a caller whose own
+	// context carries no deadline.
+	ctx, cancel := context.WithTimeout(ctx, polling.PerCallTimeout)
+	defer cancel()
+
 	c.log.Debug("Listing GitHub labels")
-	labels, _, err := c.client.Issues.ListLabels(c.ctx(), c.owner, c.repo, nil)
+	labels, _, err := c.client.Issues.ListLabels(ctx, c.owner, c.repo, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list labels: %w", err)
 	}
@@ -82,9 +93,15 @@ func (c *Client) ListLabels() ([]*Label, error) {
 // Returns [ErrPRAlreadyExists] if a PR already exists for the same branches.
 // Stores the PR number and SHA internally for use by [Client.WaitForWorkflows].
 func (c *Client) CreatePullRequest(
+	ctx context.Context,
 	head, base, title, body string,
 	assignees, reviewers, labels []string,
 ) (*github.PullRequest, error) {
+	// Bound the operation so a stalled response cannot hang a caller whose own
+	// context carries no deadline.
+	ctx, cancel := context.WithTimeout(ctx, polling.OperationTimeout)
+	defer cancel()
+
 	c.log.Debug(fmt.Sprintf("Creating pull request from %s to %s", head, base))
 
 	newPR := &github.NewPullRequest{
@@ -94,7 +111,7 @@ func (c *Client) CreatePullRequest(
 		Body:  new(body),
 	}
 
-	pr, _, err := c.client.PullRequests.Create(c.ctx(), c.owner, c.repo, newPR)
+	pr, _, err := c.client.PullRequests.Create(ctx, c.owner, c.repo, newPR)
 	if err != nil {
 		// Check if error indicates PR already exists
 		errMsg := strings.ToLower(err.Error())
@@ -107,7 +124,7 @@ func (c *Client) CreatePullRequest(
 
 	// Add assignees if provided
 	if len(assignees) > 0 {
-		_, _, err = c.client.Issues.AddAssignees(c.ctx(), c.owner, c.repo, *pr.Number, assignees)
+		_, _, err = c.client.Issues.AddAssignees(ctx, c.owner, c.repo, pr.GetNumber(), assignees)
 		if err != nil {
 			return nil, fmt.Errorf("failed to add assignees: %w", err)
 		}
@@ -115,22 +132,25 @@ func (c *Client) CreatePullRequest(
 
 	// Add reviewers if provided (filter out PR author)
 	if len(reviewers) > 0 {
-		if err := c.addReviewers(pr, reviewers); err != nil {
+		if err := c.addReviewers(ctx, pr, reviewers); err != nil {
 			return nil, err
 		}
 	}
 
 	// Add labels if provided
 	if len(labels) > 0 {
-		_, _, err = c.client.Issues.AddLabelsToIssue(c.ctx(), c.owner, c.repo, *pr.Number, labels)
+		_, _, err = c.client.Issues.AddLabelsToIssue(ctx, c.owner, c.repo, pr.GetNumber(), labels)
 		if err != nil {
 			return nil, fmt.Errorf("failed to add labels: %w", err)
 		}
 	}
 
-	c.prNumber = *pr.Number
-	c.prSHA = *pr.Head.SHA
-	c.log.Debug(fmt.Sprintf("Pull request created - number: %d, URL: %s", c.prNumber, *pr.HTMLURL))
+	// The generated getters are nil-safe. Dereferencing these fields directly
+	// panicked whenever the API response omitted one, taking down the run instead of
+	// reporting a problem.
+	c.prNumber = pr.GetNumber()
+	c.prSHA = pr.GetHead().GetSHA()
+	c.log.Debug(fmt.Sprintf("Pull request created - number: %d, URL: %s", c.prNumber, pr.GetHTMLURL()))
 	return pr, nil
 }
 
@@ -138,8 +158,13 @@ func (c *Client) CreatePullRequest(
 // Only the first matching PR is returned. Stores the PR number and SHA internally.
 //
 // Returns [ErrPRNotFound] if no open PR matches the given branches.
-func (c *Client) GetPullRequestByBranch(head, base string) (*github.PullRequest, error) {
-	prs, _, err := c.client.PullRequests.List(c.ctx(), c.owner, c.repo, &github.PullRequestListOptions{
+func (c *Client) GetPullRequestByBranch(ctx context.Context, head, base string) (*github.PullRequest, error) {
+	// Bound the operation so a stalled response cannot hang a caller whose own
+	// context carries no deadline.
+	ctx, cancel := context.WithTimeout(ctx, polling.PerCallTimeout)
+	defer cancel()
+
+	prs, _, err := c.client.PullRequests.List(ctx, c.owner, c.repo, &github.PullRequestListOptions{
 		State: "open",
 		Head:  fmt.Sprintf("%s:%s", c.owner, head),
 		Base:  base,
@@ -153,8 +178,8 @@ func (c *Client) GetPullRequestByBranch(head, base string) (*github.PullRequest,
 	}
 
 	pr := prs[0]
-	c.prNumber = *pr.Number
-	c.prSHA = *pr.Head.SHA
+	c.prNumber = pr.GetNumber()
+	c.prSHA = pr.GetHead().GetSHA()
 	return pr, nil
 }
 
@@ -164,7 +189,12 @@ func (c *Client) GetPullRequestByBranch(head, base string) (*github.PullRequest,
 //   - prNumber: the pull request number
 //   - mergeMethod: one of "merge", "squash", or "rebase" (see [GetMergeMethod])
 //   - commitTitle: used as the merge commit message
-func (c *Client) MergePullRequest(prNumber int, mergeMethod, commitTitle string) error {
+func (c *Client) MergePullRequest(ctx context.Context, prNumber int, mergeMethod, commitTitle string) error {
+	// Bound the operation so a stalled response cannot hang a caller whose own
+	// context carries no deadline.
+	ctx, cancel := context.WithTimeout(ctx, polling.OperationTimeout)
+	defer cancel()
+
 	c.log.Debug(fmt.Sprintf("Merging pull request #%d using method: %s", prNumber, mergeMethod))
 	options := &github.PullRequestOptions{
 		MergeMethod: mergeMethod, // "squash", "merge", or "rebase"
@@ -172,7 +202,7 @@ func (c *Client) MergePullRequest(prNumber int, mergeMethod, commitTitle string)
 	}
 
 	// Pass commit title as the merge commit message
-	_, _, err := c.client.PullRequests.Merge(c.ctx(), c.owner, c.repo, prNumber, commitTitle, options)
+	_, _, err := c.client.PullRequests.Merge(ctx, c.owner, c.repo, prNumber, commitTitle, options)
 	if err != nil {
 		return fmt.Errorf("failed to merge pull request: %w", err)
 	}
@@ -182,8 +212,13 @@ func (c *Client) MergePullRequest(prNumber int, mergeMethod, commitTitle string)
 }
 
 // GetPullRequestsByHead returns all open pull requests for the given head branch.
-func (c *Client) GetPullRequestsByHead(head string) ([]*github.PullRequest, error) {
-	prs, _, err := c.client.PullRequests.List(c.ctx(), c.owner, c.repo, &github.PullRequestListOptions{
+func (c *Client) GetPullRequestsByHead(ctx context.Context, head string) ([]*github.PullRequest, error) {
+	// Bound the operation so a stalled response cannot hang a caller whose own
+	// context carries no deadline.
+	ctx, cancel := context.WithTimeout(ctx, polling.PerCallTimeout)
+	defer cancel()
+
+	prs, _, err := c.client.PullRequests.List(ctx, c.owner, c.repo, &github.PullRequestListOptions{
 		Head:  fmt.Sprintf("%s:%s", c.owner, head),
 		State: "open",
 	})
@@ -198,8 +233,13 @@ func (c *Client) GetPullRequestsByHead(head string) ([]*github.PullRequest, erro
 //
 // Parameters:
 //   - branch: the branch name to delete (without "refs/heads/" prefix)
-func (c *Client) DeleteBranch(branch string) error {
-	_, err := c.client.Git.DeleteRef(c.ctx(), c.owner, c.repo, "heads/"+branch)
+func (c *Client) DeleteBranch(ctx context.Context, branch string) error {
+	// Bound the operation so a stalled response cannot hang a caller whose own
+	// context carries no deadline.
+	ctx, cancel := context.WithTimeout(ctx, polling.PerCallTimeout)
+	defer cancel()
+
+	_, err := c.client.Git.DeleteRef(ctx, c.owner, c.repo, "heads/"+branch)
 	if err != nil {
 		return fmt.Errorf("failed to delete branch: %w", err)
 	}
@@ -207,7 +247,7 @@ func (c *Client) DeleteBranch(branch string) error {
 }
 
 // addReviewers adds reviewers to a pull request, filtering out the PR author.
-func (c *Client) addReviewers(pr *github.PullRequest, reviewers []string) error {
+func (c *Client) addReviewers(ctx context.Context, pr *github.PullRequest, reviewers []string) error {
 	prAuthor := pr.User.GetLogin()
 	filteredReviewers := make([]string, 0, len(reviewers))
 	for _, reviewer := range reviewers {
@@ -220,7 +260,7 @@ func (c *Client) addReviewers(pr *github.PullRequest, reviewers []string) error 
 		reviewRequest := github.ReviewersRequest{
 			Reviewers: filteredReviewers,
 		}
-		_, _, err := c.client.PullRequests.RequestReviewers(c.ctx(), c.owner, c.repo, *pr.Number, reviewRequest)
+		_, _, err := c.client.PullRequests.RequestReviewers(ctx, c.owner, c.repo, pr.GetNumber(), reviewRequest)
 		if err != nil {
 			return fmt.Errorf("failed to add reviewers: %w", err)
 		}
@@ -229,10 +269,10 @@ func (c *Client) addReviewers(pr *github.PullRequest, reviewers []string) error 
 }
 
 // hasWorkflowRuns checks if there are any workflow runs (in any state) for this PR.
-func (c *Client) hasWorkflowRuns() bool {
+func (c *Client) hasWorkflowRuns(ctx context.Context) bool {
 	// Check for workflow runs associated with this commit SHA
 	runs, _, err := c.client.Actions.ListRepositoryWorkflowRuns(
-		c.ctx(), c.owner, c.repo,
+		ctx, c.owner, c.repo,
 		&github.ListWorkflowRunsOptions{
 			Event:   "pull_request",
 			HeadSHA: c.prSHA,
@@ -250,7 +290,7 @@ func (c *Client) hasWorkflowRuns() bool {
 
 	// Also check suites as they're created even before runs start
 	checkSuites, _, err := c.client.Checks.ListCheckSuitesForRef(
-		c.ctx(), c.owner, c.repo, c.prSHA,
+		ctx, c.owner, c.repo, c.prSHA,
 		&github.ListCheckSuiteOptions{},
 	)
 	if err != nil {
@@ -267,12 +307,12 @@ func (c *Client) hasWorkflowRuns() bool {
 }
 
 // fetchWorkflowJobs fetches all jobs for workflow runs associated with the PR SHA.
-func (c *Client) fetchWorkflowJobs() ([]*JobInfo, error) {
+func (c *Client) fetchWorkflowJobs(ctx context.Context) ([]*JobInfo, error) {
 	c.log.Debug("Fetching workflow jobs for PR")
 
 	// First, get workflow runs for this PR
 	runs, _, err := c.client.Actions.ListRepositoryWorkflowRuns(
-		c.ctx(), c.owner, c.repo,
+		ctx, c.owner, c.repo,
 		&github.ListWorkflowRunsOptions{
 			Event:   "pull_request",
 			HeadSHA: c.prSHA,
@@ -290,7 +330,7 @@ func (c *Client) fetchWorkflowJobs() ([]*JobInfo, error) {
 	// Collect all jobs from all workflow runs
 	var allJobs []*JobInfo
 	for _, run := range runs.WorkflowRuns {
-		jobs, err := c.fetchJobsForRun(run.GetID())
+		jobs, err := c.fetchJobsForRun(ctx, run.GetID())
 		if err != nil {
 			return nil, err
 		}
@@ -302,14 +342,14 @@ func (c *Client) fetchWorkflowJobs() ([]*JobInfo, error) {
 }
 
 // fetchJobsForRun fetches all jobs for a specific workflow run with pagination.
-func (c *Client) fetchJobsForRun(runID int64) ([]*JobInfo, error) {
+func (c *Client) fetchJobsForRun(ctx context.Context, runID int64) ([]*JobInfo, error) {
 	var allJobs []*JobInfo
 	page := 1
 	perPage := 100
 
 	for {
 		jobs, resp, err := c.client.Actions.ListWorkflowJobs(
-			c.ctx(), c.owner, c.repo, runID,
+			ctx, c.owner, c.repo, runID,
 			&github.ListWorkflowJobsOptions{
 				ListOptions: github.ListOptions{
 					Page:    page,
@@ -354,7 +394,7 @@ func (c *Client) convertCheckRunsToJobInfo(checkRuns []*github.CheckRun) []*JobI
 		}
 
 		job := &JobInfo{
-			ID:         *check.ID,
+			ID:         check.GetID(),
 			Name:       check.GetName(),
 			Status:     check.GetStatus(),
 			Conclusion: check.GetConclusion(),
@@ -372,11 +412,6 @@ func (c *Client) convertCheckRunsToJobInfo(checkRuns []*github.CheckRun) []*JobI
 		jobs = append(jobs, job)
 	}
 	return jobs
-}
-
-// ctx returns the context for API calls.
-func (c *Client) ctx() context.Context {
-	return context.Background()
 }
 
 // Ensure Client implements APIClient interface at compile time.

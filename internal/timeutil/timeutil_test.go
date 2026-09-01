@@ -176,10 +176,10 @@ func TestFormatDuration_RoundingBehavior(t *testing.T) {
 		duration time.Duration
 		expected string
 	}{
-		{1499 * time.Millisecond, "1s"},  // Rounds down
-		{1500 * time.Millisecond, "2s"},  // Rounds up (tie rounds away from zero)
-		{2500 * time.Millisecond, "3s"},  // Rounds up (tie rounds away from zero)
-		{3500 * time.Millisecond, "4s"},  // Rounds up (tie rounds away from zero)
+		{1499 * time.Millisecond, "1s"}, // Rounds down
+		{1500 * time.Millisecond, "2s"}, // Rounds up (tie rounds away from zero)
+		{2500 * time.Millisecond, "3s"}, // Rounds up (tie rounds away from zero)
+		{3500 * time.Millisecond, "4s"}, // Rounds up (tie rounds away from zero)
 	}
 
 	for _, tt := range tests {

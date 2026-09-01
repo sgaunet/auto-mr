@@ -1,6 +1,7 @@
 package mocks
 
 import (
+	"context"
 	"slices"
 	"sync"
 	"time"
@@ -38,7 +39,7 @@ func NewPlatformProvider() *PlatformProvider {
 }
 
 // Initialize implements platform.Provider.
-func (m *PlatformProvider) Initialize(remoteURL string) error {
+func (m *PlatformProvider) Initialize(_ context.Context, remoteURL string) error {
 	m.trackCall("Initialize", map[string]any{
 		"remoteURL": remoteURL,
 	})
@@ -46,18 +47,18 @@ func (m *PlatformProvider) Initialize(remoteURL string) error {
 }
 
 // ListLabels implements platform.Provider.
-func (m *PlatformProvider) ListLabels() ([]platform.Label, error) {
+func (m *PlatformProvider) ListLabels(_ context.Context) ([]platform.Label, error) {
 	m.trackCall("ListLabels", map[string]any{})
 	return m.ListLabelsResponse, m.ListLabelsError
 }
 
 // Create implements platform.Provider.
-func (m *PlatformProvider) Create(params platform.CreateParams) (*platform.MergeRequest, error) {
+func (m *PlatformProvider) Create(_ context.Context, params platform.CreateParams) (*platform.MergeRequest, error) {
 	m.trackCall("Create", map[string]any{
 		argSourceBranch: params.SourceBranch,
 		argTargetBranch: params.TargetBranch,
 		argTitle:        params.Title,
-		"body":          params.Body,
+		argBody:         params.Body,
 		argLabels:       params.Labels,
 		argSquash:       params.Squash,
 	})
@@ -65,7 +66,9 @@ func (m *PlatformProvider) Create(params platform.CreateParams) (*platform.Merge
 }
 
 // GetByBranch implements platform.Provider.
-func (m *PlatformProvider) GetByBranch(sourceBranch, targetBranch string) (*platform.MergeRequest, error) {
+func (m *PlatformProvider) GetByBranch(
+	_ context.Context, sourceBranch, targetBranch string,
+) (*platform.MergeRequest, error) {
 	m.trackCall("GetByBranch", map[string]any{
 		argSourceBranch: sourceBranch,
 		argTargetBranch: targetBranch,
@@ -74,7 +77,7 @@ func (m *PlatformProvider) GetByBranch(sourceBranch, targetBranch string) (*plat
 }
 
 // WaitForPipeline implements platform.Provider.
-func (m *PlatformProvider) WaitForPipeline(timeout time.Duration) (string, error) {
+func (m *PlatformProvider) WaitForPipeline(_ context.Context, timeout time.Duration) (string, error) {
 	m.trackCall("WaitForPipeline", map[string]any{
 		argTimeout: timeout,
 	})
@@ -82,7 +85,7 @@ func (m *PlatformProvider) WaitForPipeline(timeout time.Duration) (string, error
 }
 
 // Approve implements platform.Provider.
-func (m *PlatformProvider) Approve(mrID int64) error {
+func (m *PlatformProvider) Approve(_ context.Context, mrID int64) error {
 	m.trackCall("Approve", map[string]any{
 		"mrID": mrID,
 	})
@@ -90,7 +93,7 @@ func (m *PlatformProvider) Approve(mrID int64) error {
 }
 
 // Merge implements platform.Provider.
-func (m *PlatformProvider) Merge(params platform.MergeParams) error {
+func (m *PlatformProvider) Merge(_ context.Context, params platform.MergeParams) error {
 	m.trackCall("Merge", map[string]any{
 		"mrID":          params.MRID,
 		argSquash:       params.Squash,

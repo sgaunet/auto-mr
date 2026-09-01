@@ -39,8 +39,8 @@ func (r *Renderer) DisplaySelectionPrompt(commits []Commit) (int, error) {
 	}
 
 	prompt := &survey.Select{
-		Message: "Select commit message for MR/PR:",
-		Options: options,
+		Message:  "Select commit message for MR/PR:",
+		Options:  options,
 		PageSize: SelectionPageSize,
 	}
 

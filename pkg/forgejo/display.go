@@ -9,19 +9,15 @@ import (
 // displayRenderer implements the DisplayRenderer interface using bullets library.
 // It provides UI rendering capabilities with proper resource management.
 type displayRenderer struct {
-	logger         *bullets.Logger
-	updatable      *bullets.UpdatableLogger
-	activeSpinners map[string]*bullets.Spinner
-	activeHandles  map[string]*bullets.BulletHandle
+	logger    *bullets.Logger
+	updatable *bullets.UpdatableLogger
 }
 
 // newDisplayRenderer creates a new display renderer wrapping bullets library.
 func newDisplayRenderer(logger *bullets.Logger, updatable *bullets.UpdatableLogger) *displayRenderer {
 	return &displayRenderer{
-		logger:         logger,
-		updatable:      updatable,
-		activeSpinners: make(map[string]*bullets.Spinner),
-		activeHandles:  make(map[string]*bullets.BulletHandle),
+		logger:    logger,
+		updatable: updatable,
 	}
 }
 
@@ -79,19 +75,6 @@ func (d *displayRenderer) IncreasePadding() {
 // DecreasePadding decreases the indentation level for nested output.
 func (d *displayRenderer) DecreasePadding() {
 	d.updatable.DecreasePadding()
-}
-
-// Cleanup stops all active spinners and clears handles.
-// This should be called when the display is no longer needed.
-func (d *displayRenderer) Cleanup() {
-	for _, spinner := range d.activeSpinners {
-		if spinner != nil {
-			spinner.Stop()
-		}
-	}
-
-	d.activeSpinners = make(map[string]*bullets.Spinner)
-	d.activeHandles = make(map[string]*bullets.BulletHandle)
 }
 
 // Ensure displayRenderer implements DisplayRenderer interface at compile time.

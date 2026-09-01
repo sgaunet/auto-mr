@@ -17,7 +17,7 @@ This repeats consistently across `pkg/github/`, `pkg/gitlab/`, `pkg/forgejo/`, `
 
 - Test file naming: `*_test.go`, package `<name>_test` (black box only — never reach into unexported internals)
 - Test organization: colocated with source; shared fixtures/mocks live in top-level `testing/fixtures/` and `testing/mocks/`
-- Mocking strategy: narrow interfaces (`APIClient`, `StateTracker`, `DisplayRenderer`) satisfied by both real clients and `testing/mocks` fakes; compile-time checks via `var _ Interface = (*Type)(nil)`
+- Mocking strategy: narrow interfaces (`APIClient`, `DisplayRenderer`) satisfied by both real clients and `testing/mocks` fakes; compile-time checks via `var _ Interface = (*Type)(nil)`. The `pkg/platform` adapters hold `APIClient`, not the concrete client, so either a fake or an httptest-backed real client can be substituted at construction.
 
 ## Platform Adapter Pattern
 

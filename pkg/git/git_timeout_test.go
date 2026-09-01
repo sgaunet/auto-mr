@@ -10,7 +10,7 @@ import (
 	"github.com/sgaunet/auto-mr/pkg/git"
 )
 
-// TestSwitchBranch_WithCancelledContext tests that SwitchBranch respects context cancellation
+// TestSwitchBranch_WithCancelledContext tests that SwitchBranch respects context cancellation.
 func TestSwitchBranch_WithCancelledContext(t *testing.T) {
 	repo := setupTestRepo(t)
 
@@ -40,7 +40,7 @@ func TestSwitchBranch_WithCancelledContext(t *testing.T) {
 	}
 }
 
-// TestPull_WithCancelledContext tests that Pull respects context cancellation
+// TestPull_WithCancelledContext tests that Pull respects context cancellation.
 func TestPull_WithCancelledContext(t *testing.T) {
 	repo := setupTestRepo(t)
 
@@ -70,7 +70,7 @@ func TestPull_WithCancelledContext(t *testing.T) {
 	}
 }
 
-// TestDeleteBranch_WithCancelledContext tests that DeleteBranch respects context cancellation
+// TestDeleteBranch_WithCancelledContext tests that DeleteBranch respects context cancellation.
 func TestDeleteBranch_WithCancelledContext(t *testing.T) {
 	repo := setupTestRepo(t)
 
@@ -100,7 +100,7 @@ func TestDeleteBranch_WithCancelledContext(t *testing.T) {
 	}
 }
 
-// TestFetchAndPrune_WithCancelledContext tests that FetchAndPrune respects context cancellation
+// TestFetchAndPrune_WithCancelledContext tests that FetchAndPrune respects context cancellation.
 func TestFetchAndPrune_WithCancelledContext(t *testing.T) {
 	repo := setupTestRepo(t)
 
@@ -130,7 +130,7 @@ func TestFetchAndPrune_WithCancelledContext(t *testing.T) {
 	}
 }
 
-// TestGitTimeoutError_Unwrap tests that GitTimeoutError properly unwraps to base error
+// TestGitTimeoutError_Unwrap tests that GitTimeoutError properly unwraps to base error.
 func TestGitTimeoutError_Unwrap(t *testing.T) {
 	baseErr := errors.New("base error")
 	timeoutErr := &git.GitTimeoutError{
@@ -144,7 +144,7 @@ func TestGitTimeoutError_Unwrap(t *testing.T) {
 	}
 }
 
-// TestGitTimeoutError_Message tests that error message includes operation and timeout
+// TestGitTimeoutError_Message tests that error message includes operation and timeout.
 func TestGitTimeoutError_Message(t *testing.T) {
 	err := &git.GitTimeoutError{
 		Operation: "pull",
@@ -164,7 +164,7 @@ func TestGitTimeoutError_Message(t *testing.T) {
 	}
 }
 
-// TestSwitchBranch_WithTimeout tests that SwitchBranch works with a reasonable timeout
+// TestSwitchBranch_WithTimeout tests that SwitchBranch works with a reasonable timeout.
 func TestSwitchBranch_WithTimeout(t *testing.T) {
 	repo := setupTestRepo(t)
 
@@ -187,7 +187,7 @@ func TestSwitchBranch_WithTimeout(t *testing.T) {
 	}
 }
 
-// TestCleanup_WithContext tests that Cleanup properly propagates context to all operations
+// TestCleanup_WithContext tests that Cleanup properly propagates context to all operations.
 func TestCleanup_WithContext(t *testing.T) {
 	repo := setupTestRepo(t)
 
@@ -224,4 +224,33 @@ func setupTestRepo(t *testing.T) *git.Repository {
 	}
 
 	return repo
+}
+
+// TestPushBranch_ContextCancelled verifies that the go-git push path honours the
+// caller's context.
+//
+// go-git's Push helper runs on context.Background() and so cannot be interrupted:
+// a stalled transport would block indefinitely and never reach the native git
+// fallback, which is itself bounded. PushBranch therefore uses PushContext. This
+// test would hang, rather than fail, without that change.
+func TestPushBranch_ContextCancelled(t *testing.T) {
+	repo, err := git.OpenRepository(newRepoWithBranches(t, "main"))
+	if err != nil {
+		t.Fatalf("OpenRepository: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately.
+
+	done := make(chan error, 1)
+	go func() { done <- repo.PushBranch(ctx, "main") }()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Error("PushBranch returned nil for a cancelled context; expected an error")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("PushBranch did not return for a cancelled context; the push path is unbounded")
+	}
 }

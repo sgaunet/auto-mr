@@ -40,7 +40,10 @@ Pipeline pattern in `main.go`: validate branch → detect platform → push & cr
 | `pkg/commits/` | Commit message parsing and generation |
 | `pkg/platform/` | Platform adapter abstraction |
 | `internal/logger/` | Structured logging via `log/slog` |
-| `internal/ui/` | Interactive terminal prompts (survey/v2) |
+| `internal/polling/` | Poll cadence, per-request bounds, transient-failure classification |
+| `internal/trackmap/` | Mutex-guarded map shared by the CI trackers |
+| `internal/urlutil/` | Git remote URL parsing (host and path components) |
+| `internal/labels/` | Label selection helpers |
 | `internal/security/` | Token sanitization and secure error wrapping |
 | `internal/timeutil/` | Duration formatting utilities |
 | `testing/mocks/` | Mock implementations for black box testing |
