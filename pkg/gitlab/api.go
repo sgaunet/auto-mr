@@ -391,6 +391,156 @@ func (c *Client) ApproveMergeRequest(ctx context.Context, mrIID int64) error {
 	return nil
 }
 
+// Cadence for the mergeability wait. Named rather than inline so the progression
+// reads as one policy, the way [polling.DefaultSchedule] does.
+//
+// It is deliberately brisker than that schedule, which paces CI runs measured in
+// minutes: mergeability normally settles in well under a second, and a five-second
+// first retry would double the runtime of the very case this wait exists for -- a
+// project with no pipeline at all.
+const (
+	mergeabilityBase      = 500 * time.Millisecond
+	mergeabilityGrown     = 2 * time.Second
+	mergeabilityCap       = 5 * time.Second
+	mergeabilityGrowAfter = 5 * time.Second
+	mergeabilityCapAfter  = 15 * time.Second
+
+	// mergeabilityTimeout bounds the wait at a fraction of [polling.OperationTimeout]
+	// so the merge that follows still has budget. A wait that spent the whole
+	// operation deadline would hand the merge a dead context and report a timeout for
+	// a merge never attempted.
+	mergeabilityTimeout = 30 * time.Second
+)
+
+// mergeabilitySchedule paces the wait. It is a var so the test bridge can shorten it,
+// the same way TestMain shortens [polling.DefaultSchedule].
+var mergeabilitySchedule = polling.Schedule{
+	Base:      mergeabilityBase,
+	Grown:     mergeabilityGrown,
+	Cap:       mergeabilityCap,
+	GrowAfter: mergeabilityGrowAfter,
+	CapAfter:  mergeabilityCapAfter,
+}
+
+// isTerminalMergeStatus reports whether waiting longer cannot change the outcome.
+//
+// These are answered immediately rather than waited out, so the caller learns that a
+// merge request conflicts or is still a draft instead of spending the whole budget
+// first and then reporting a timeout.
+func isTerminalMergeStatus(status string) bool {
+	switch status {
+	case mergeStatusConflict, mergeStatusBroken, mergeStatusDraft, mergeStatusNotOpen,
+		mergeStatusDiscussions, mergeStatusNeedRebase, mergeStatusChangesRequested,
+		mergeStatusBlocked, mergeStatusPoliciesDenied, mergeStatusNotApproved:
+		return true
+	default:
+		return false
+	}
+}
+
+// isTransientMergeStatus reports whether GitLab is known to still be working the
+// mergeability check out. Any other non-terminal value is waited out just the same;
+// the distinction only sharpens the debug log when a wait stalls on something this
+// package has never heard of.
+func isTransientMergeStatus(status string) bool {
+	switch status {
+	case mergeStatusChecking, mergeStatusUnchecked, mergeStatusPreparing, mergeStatusApprovalsSyncing:
+		return true
+	default:
+		return false
+	}
+}
+
+// classifyMergeStatus turns a detailed_merge_status into the wait's next move: true
+// means the merge may proceed, a non-nil error that it never will, and false with no
+// error that the answer is still pending.
+func classifyMergeStatus(status string) (bool, error) {
+	switch {
+	// An empty status means the instance predates detailed_merge_status
+	// (GitLab < 15.6). There is nothing to wait for, and treating silence as "not
+	// yet mergeable" would break merging on those instances outright.
+	case status == mergeStatusMergeable || status == "":
+		return true, nil
+	case isTerminalMergeStatus(status):
+		return false, fmt.Errorf("%w: %s", errMRNotMergeable, status)
+	default:
+		return false, nil
+	}
+}
+
+// noteMergeabilityWait reports that the merge is waiting, once, and records at debug
+// level when the status is one this package does not recognise -- the only clue if a
+// wait ever stalls on a state GitLab added after this was written.
+func (c *Client) noteMergeabilityWait(status string, announced bool) {
+	if !isTransientMergeStatus(status) {
+		c.log.Debug(fmt.Sprintf("Unrecognised detailed_merge_status %q, waiting it out", status))
+	}
+	if !announced {
+		c.log.Info("Waiting for GitLab to confirm the merge/pull request is mergeable...")
+	}
+}
+
+// mergeabilityStatus reads the merge request's detailed_merge_status, bounded like
+// every other single request made while polling.
+func (c *Client) mergeabilityStatus(ctx context.Context, mrIID int64) (string, error) {
+	callCtx, cancel := context.WithTimeout(ctx, polling.PerCallTimeout)
+	defer cancel()
+
+	mr, _, err := c.client.MergeRequests.GetMergeRequest(c.projectID, mrIID, nil, gitlab.WithContext(callCtx))
+	if err != nil {
+		return "", fmt.Errorf("failed to get merge request mergeability: %w", err)
+	}
+	return mr.DetailedMergeStatus, nil
+}
+
+// waitUntilMergeable blocks until GitLab reports the merge request as mergeable.
+//
+// The first check happens before any sleep, so the common case -- a merge request
+// that CI has already settled -- costs one request and no delay.
+func (c *Client) waitUntilMergeable(ctx context.Context, mrIID int64) error {
+	waitCtx, cancel := context.WithTimeout(ctx, mergeabilityTimeout)
+	defer cancel()
+
+	start := time.Now()
+	var lastStatus string
+	announced := false
+
+	for waitCtx.Err() == nil {
+		status, err := c.mergeabilityStatus(waitCtx, mrIID)
+		if err != nil {
+			if waitCtx.Err() != nil {
+				break // Budget spent or cancelled; reported after the loop.
+			}
+			return err
+		}
+		lastStatus = status
+
+		mergeable, err := classifyMergeStatus(status)
+		if err != nil {
+			return err
+		}
+		if mergeable {
+			return nil
+		}
+
+		// Announce only once it is clear we are actually waiting: the common case
+		// returns above on the first read and must stay silent.
+		c.noteMergeabilityWait(status, announced)
+		announced = true
+
+		if !polling.Sleep(waitCtx, mergeabilitySchedule.IntervalFor(time.Since(start))) {
+			break
+		}
+	}
+
+	// waitCtx is always DeadlineExceeded once its own bound elapses, so only the
+	// parent can tell a deliberate interrupt from an exhausted budget.
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return errMergeabilityCanceled
+	}
+	return fmt.Errorf("%w (last status: %s)", errMergeabilityTimeout, lastStatus)
+}
+
 // MergeMergeRequest merges a merge request with optional squash.
 // The source branch is automatically removed after merge.
 //
@@ -403,6 +553,14 @@ func (c *Client) MergeMergeRequest(ctx context.Context, mrIID int64, squash bool
 	// context carries no deadline.
 	ctx, cancel := context.WithTimeout(ctx, polling.OperationTimeout)
 	defer cancel()
+
+	// GitLab computes mergeability asynchronously and rejects a merge with 405 until
+	// that check settles. On a project with no pipeline there is no CI wait to cover
+	// the window, so create -> approve -> merge runs straight through it; the merge
+	// has to wait for mergeability explicitly.
+	if err := c.waitUntilMergeable(ctx, mrIID); err != nil {
+		return err
+	}
 
 	c.log.Debug(fmt.Sprintf("Merging merge request, IID: %d", mrIID))
 

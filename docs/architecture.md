@@ -57,6 +57,7 @@ Concrete adapters (`GitLabAdapter`, `GitHubAdapter`, `ForgejoAdapter`) are creat
 |---|---|---|---|
 | CI source | Pipeline/job polling | Check runs | Commit statuses (`GetCombinedStatus`) |
 | Approve | API call (required for merge) | No-op | No-op |
+| Merge precondition | Waits for `detailed_merge_status` to settle | None | None |
 | Branch deletion | Via merge API option | Via merge API | Via `DeleteBranchAfterMerge` in merge option |
 
 ### Forgejo Adapter (`ForgejoAdapter`)

@@ -13,6 +13,10 @@ var (
 	errMRNotFound       = errors.New("no merge request found for branch")
 	errMRAlreadyExists  = errors.New("merge request already exists for this branch")
 
+	errMRNotMergeable       = errors.New("merge request cannot be merged")
+	errMergeabilityTimeout  = errors.New("timeout waiting for merge request to become mergeable")
+	errMergeabilityCanceled = errors.New("canceled while waiting for merge request to become mergeable")
+
 	// ErrTokenRequired is returned when GITLAB_TOKEN environment variable is missing.
 	ErrTokenRequired = errTokenRequired
 	// ErrInvalidURLFormat is returned when the GitLab URL format is invalid.
@@ -31,4 +35,16 @@ var (
 	ErrMRNotFound = errMRNotFound
 	// ErrMRAlreadyExists is returned when a merge request already exists for the branch.
 	ErrMRAlreadyExists = errMRAlreadyExists
+	// ErrMRNotMergeable is returned when GitLab reports a state that waiting cannot
+	// fix -- a conflict, an unresolved discussion, a draft. It names the state, so a
+	// caller can say why the merge was refused instead of surfacing a bare 405.
+	ErrMRNotMergeable = errMRNotMergeable
+	// ErrMergeabilityTimeout is returned when GitLab never settled the merge request
+	// into a mergeable state within the budget. The message carries the last state
+	// seen, which is the only clue to why it stalled.
+	ErrMergeabilityTimeout = errMergeabilityTimeout
+	// ErrMergeabilityCanceled is returned when the caller's context is cancelled while
+	// waiting for mergeability, for example on interrupt. It is distinct from a
+	// timeout so callers can tell a deliberate abort from an exhausted budget.
+	ErrMergeabilityCanceled = errMergeabilityCanceled
 )

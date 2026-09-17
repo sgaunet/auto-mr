@@ -1,6 +1,7 @@
 package gitlab_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"github.com/sgaunet/auto-mr/internal/polling"
@@ -259,6 +260,8 @@ func TestApproveAndMergeMergeRequest(t *testing.T) {
 		case strings.HasSuffix(r.URL.Path, "/merge"):
 			merged.Store(true)
 			writeJSON(t, w, map[string]any{"iid": 7, "state": "merged"})
+		case strings.HasSuffix(r.URL.Path, "/merge_requests/7"):
+			writeJSON(t, w, map[string]any{"iid": 7, "detailed_merge_status": "mergeable"})
 		default:
 			writeJSON(t, w, map[string]any{"id": 99})
 		}
@@ -291,6 +294,12 @@ func TestMergeMergeRequest_SurfacesFailure(t *testing.T) {
 			writeJSON(t, w, map[string]any{"message": "Branch cannot be merged"})
 			return
 		}
+		// Clear the mergeability precondition so the rejected merge is what the
+		// test actually exercises.
+		if strings.HasSuffix(r.URL.Path, "/merge_requests/7") {
+			writeJSON(t, w, map[string]any{"iid": 7, "detailed_merge_status": "mergeable"})
+			return
+		}
 		writeJSON(t, w, map[string]any{"id": 99})
 	}))
 	defer srv.Close()
@@ -298,6 +307,213 @@ func TestMergeMergeRequest_SurfacesFailure(t *testing.T) {
 	client := newTestClient(t, srv)
 	if err := client.MergeMergeRequest(t.Context(), 7, true, "t"); err == nil {
 		t.Error("expected an error for a rejected merge")
+	}
+}
+
+// mergeStub serves the mergeability read, the merge endpoint, and a catch-all.
+//
+// statusFor is given the 1-based poll number so a test can make GitLab settle after
+// a few reads; returning "" omits detailed_merge_status entirely, which is what an
+// instance older than GitLab 15.6 does.
+func mergeStub(
+	t *testing.T, merged *atomic.Bool, polls *atomic.Int32, statusFor func(poll int32) string,
+) *httptest.Server {
+	t.Helper()
+
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/merge"):
+			merged.Store(true)
+			writeJSON(t, w, map[string]any{"iid": 7, "state": "merged"})
+		case strings.HasSuffix(r.URL.Path, "/merge_requests/7"):
+			body := map[string]any{"iid": 7}
+			if status := statusFor(polls.Add(1)); status != "" {
+				body["detailed_merge_status"] = status
+			}
+			writeJSON(t, w, body)
+		default:
+			writeJSON(t, w, map[string]any{"id": 99})
+		}
+	}))
+}
+
+// TestMergeMergeRequest_MergeableImmediately pins the common case: a merge request
+// GitLab has already settled costs one extra read and no delay. If this ever starts
+// polling, every merge in the tool pays for it.
+func TestMergeMergeRequest_MergeableImmediately(t *testing.T) {
+	var merged atomic.Bool
+	var polls atomic.Int32
+
+	srv := mergeStub(t, &merged, &polls, func(int32) string { return "mergeable" })
+	defer srv.Close()
+
+	client := newTestClient(t, srv)
+	if err := client.MergeMergeRequest(t.Context(), 7, true, "Add a feature"); err != nil {
+		t.Fatalf("MergeMergeRequest: %v", err)
+	}
+
+	if !merged.Load() {
+		t.Error("merge endpoint was never called")
+	}
+	if got := polls.Load(); got != 1 {
+		t.Errorf("mergeability read %d times, want exactly 1", got)
+	}
+}
+
+// TestMergeMergeRequest_WaitsForMergeability is the regression test for issue #117.
+// On a project with no pipeline the merge arrives while GitLab is still checking
+// mergeability, and merging then is rejected with 405. The wait must ride that out.
+func TestMergeMergeRequest_WaitsForMergeability(t *testing.T) {
+	const settlesOnPoll = 3
+
+	var merged atomic.Bool
+	var polls atomic.Int32
+
+	srv := mergeStub(t, &merged, &polls, func(poll int32) string {
+		if poll < settlesOnPoll {
+			return "checking"
+		}
+		return "mergeable"
+	})
+	defer srv.Close()
+
+	client := newTestClient(t, srv)
+	if err := client.MergeMergeRequest(t.Context(), 7, true, "Add a feature"); err != nil {
+		t.Fatalf("MergeMergeRequest: %v", err)
+	}
+
+	if !merged.Load() {
+		t.Error("merge endpoint was never called")
+	}
+	if got := polls.Load(); got < settlesOnPoll {
+		t.Errorf("mergeability read %d times, want at least %d", got, settlesOnPoll)
+	}
+}
+
+// TestMergeMergeRequest_TerminalStatusFails covers the other half of the fix: a state
+// waiting cannot change is reported as such, immediately, and the merge is never
+// attempted. Before this change the merge went out anyway and the user saw a 405.
+func TestMergeMergeRequest_TerminalStatusFails(t *testing.T) {
+	for _, status := range []string{
+		"conflict", "broken_status", "draft_status", "not_open", "discussions_not_resolved",
+		"need_rebase", "requested_changes", "blocked_status", "policies_denied", "not_approved",
+	} {
+		t.Run(status, func(t *testing.T) {
+			var merged atomic.Bool
+			var polls atomic.Int32
+
+			srv := mergeStub(t, &merged, &polls, func(int32) string { return status })
+			defer srv.Close()
+
+			client := newTestClient(t, srv)
+			err := client.MergeMergeRequest(t.Context(), 7, true, "Add a feature")
+
+			if !errors.Is(err, gitlab.ErrMRNotMergeable) {
+				t.Fatalf("got %v, want ErrMRNotMergeable", err)
+			}
+			// The status is the actionable part of the message; without it the user
+			// learns only that something was wrong.
+			if !strings.Contains(err.Error(), status) {
+				t.Errorf("error %q does not name the blocking status", err)
+			}
+			if merged.Load() {
+				t.Error("merge was attempted despite a terminal mergeability status")
+			}
+			// A settled refusal must not be waited on at all.
+			if got := polls.Load(); got != 1 {
+				t.Errorf("mergeability read %d times, want exactly 1", got)
+			}
+		})
+	}
+}
+
+// TestMergeMergeRequest_EmptyStatusProceeds guards instances older than GitLab 15.6,
+// which do not report detailed_merge_status at all. Treating silence as "not yet
+// mergeable" would stop those users merging entirely.
+func TestMergeMergeRequest_EmptyStatusProceeds(t *testing.T) {
+	var merged atomic.Bool
+	var polls atomic.Int32
+
+	srv := mergeStub(t, &merged, &polls, func(int32) string { return "" })
+	defer srv.Close()
+
+	client := newTestClient(t, srv)
+	if err := client.MergeMergeRequest(t.Context(), 7, true, "Add a feature"); err != nil {
+		t.Fatalf("MergeMergeRequest: %v", err)
+	}
+
+	if !merged.Load() {
+		t.Error("merge endpoint was never called")
+	}
+}
+
+// TestMergeMergeRequest_UnknownStatusTimesOut covers a status this package has never
+// heard of: it is waited out rather than guessed at, and the failure names the last
+// status seen so the report is actionable.
+func TestMergeMergeRequest_UnknownStatusTimesOut(t *testing.T) {
+	const unknown = "security_policy_violations"
+
+	var merged atomic.Bool
+	var polls atomic.Int32
+
+	srv := mergeStub(t, &merged, &polls, func(int32) string { return unknown })
+	defer srv.Close()
+
+	// The caller's own deadline bounds the wait, so the test does not sit through
+	// the production budget.
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+
+	client := newTestClient(t, srv)
+	start := time.Now()
+	err := client.MergeMergeRequest(ctx, 7, true, "Add a feature")
+
+	if !errors.Is(err, gitlab.ErrMergeabilityTimeout) {
+		t.Fatalf("got %v, want ErrMergeabilityTimeout", err)
+	}
+	if !strings.Contains(err.Error(), unknown) {
+		t.Errorf("error %q does not name the last status seen", err)
+	}
+	if elapsed := time.Since(start); elapsed > 10*time.Second {
+		t.Errorf("took %v, far beyond the caller's deadline", elapsed)
+	}
+	if merged.Load() {
+		t.Error("merge was attempted despite never becoming mergeable")
+	}
+}
+
+// TestMergeMergeRequest_CanceledWhileWaiting checks that an interrupt during the wait
+// is reported as an abort, not as an exhausted budget -- the same distinction
+// WaitForPipeline draws.
+func TestMergeMergeRequest_CanceledWhileWaiting(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	var merged atomic.Bool
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/merge"):
+			merged.Store(true)
+			writeJSON(t, w, map[string]any{"iid": 7, "state": "merged"})
+		case strings.HasSuffix(r.URL.Path, "/merge_requests/7"):
+			// Written directly rather than through writeJSON: cancelling below can
+			// tear the connection down mid-write, and that is not a test failure.
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"iid":7,"detailed_merge_status":"checking"}`))
+			cancel()
+		default:
+			writeJSON(t, w, map[string]any{"id": 99})
+		}
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv)
+	if err := client.MergeMergeRequest(ctx, 7, true, "Add a feature"); !errors.Is(err, gitlab.ErrMergeabilityCanceled) {
+		t.Fatalf("got %v, want ErrMergeabilityCanceled", err)
+	}
+	if merged.Load() {
+		t.Error("merge was attempted after cancellation")
 	}
 }
 
@@ -461,12 +677,14 @@ func TestWaitForPipeline_JobWithoutCreatedAt(t *testing.T) {
 // under test are the schedule's own concern and are covered directly in
 // internal/polling; here only the loop behaviour matters.
 func TestMain(m *testing.M) {
-	polling.DefaultSchedule = polling.Schedule{
+	fast := polling.Schedule{
 		Base:      10 * time.Millisecond,
 		Grown:     10 * time.Millisecond,
 		Cap:       10 * time.Millisecond,
 		GrowAfter: time.Hour,
 		CapAfter:  time.Hour,
 	}
+	polling.DefaultSchedule = fast
+	gitlab.SetMergeabilityScheduleForTest(fast)
 	os.Exit(m.Run())
 }
