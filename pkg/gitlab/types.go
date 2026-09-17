@@ -23,6 +23,38 @@ const (
 	statusSkipped          = "skipped"
 )
 
+// Mergeability states GitLab reports in a merge request's detailed_merge_status.
+//
+// GitLab computes mergeability asynchronously, so a freshly created merge request
+// answers "checking" until the check settles, and merging before then is rejected
+// with 405. Only the states this package acts on are named: the field carries more,
+// and an unrecognised value is waited out rather than guessed at.
+const (
+	mergeStatusMergeable = "mergeable"
+
+	// Transient: GitLab has not finished computing mergeability yet.
+	mergeStatusChecking         = "checking"
+	mergeStatusUnchecked        = "unchecked"
+	mergeStatusPreparing        = "preparing"
+	mergeStatusApprovalsSyncing = "approvals_syncing"
+
+	// Terminal: waiting cannot change these, so they are reported straight away
+	// instead of costing the caller the whole budget first.
+	mergeStatusConflict         = "conflict"
+	mergeStatusBroken           = "broken_status"
+	mergeStatusDraft            = "draft_status"
+	mergeStatusNotOpen          = "not_open"
+	mergeStatusDiscussions      = "discussions_not_resolved"
+	mergeStatusNeedRebase       = "need_rebase"
+	mergeStatusChangesRequested = "requested_changes"
+	mergeStatusBlocked          = "blocked_status"
+	mergeStatusPoliciesDenied   = "policies_denied"
+	// Terminal because auto-mr approves exactly once, just before merging, and
+	// approvals_syncing already covers the window where that approval is landing.
+	// Reaching not_approved after that means waiting longer cannot help.
+	mergeStatusNotApproved = "not_approved"
+)
+
 // Client represents a GitLab API client wrapper that manages merge request
 // lifecycle operations. It stores internal state (projectID, mrIID, mrSHA)
 // that is set by methods like [Client.SetProjectFromURL] and [Client.CreateMergeRequest].
