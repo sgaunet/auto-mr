@@ -26,3 +26,8 @@
   - `.github/workflows/snapshot.yml` — snapshot builds via goreleaser on every push to `main`
   - `.github/workflows/release.yml` — full release via goreleaser, triggered by pushing a `v*` tag
 - Tool versions (go, task, golangci-lint, goreleaser, syft) are pinned in `mise.toml` and installed via `jdx/mise-action` in CI
+- If a release aborts part-way through uploading, GitHub keeps the release as an unpublished
+  draft holding whatever already uploaded. Delete that draft before re-running the tag —
+  GoReleaser looks releases up with get-release-by-tag, which does not return drafts, so a
+  re-run would otherwise create a second draft for the same tag:
+  `gh api repos/sgaunet/auto-mr/releases --jq '.[]|select(.draft)|{id,tag_name}'`
