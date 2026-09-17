@@ -7,6 +7,7 @@ builds:
   - env:
       - CGO_ENABLED=0
     ldflags:
+      - -s -w
       - -X main.version={{.Version}}
     goos:
       - linux
@@ -18,15 +19,6 @@ builds:
     goarm:
       - "6"
       - "7"
-    ignore:
-      - goos: darwin
-        goarch: "386"
-      - goos: windows
-        goarch: arm
-        goarm: "7"
-      - goos: windows
-        goarch: arm
-        goarm: "6"
 
 archives:
   - name_template: '{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}'
@@ -35,6 +27,12 @@ archives:
 checksum:
   # https://goreleaser.com/customization/checksum/
   name_template: 'checksums.txt'
+
+# A 504 from uploads.github.com can leave the asset stored server-side anyway;
+# GoReleaser's retry then fails with 422 already_exists and aborts the release.
+# This makes it delete the stale asset and retry cleanly instead.
+release:
+  replace_existing_artifacts: true
 
 changelog:
   sort: asc
