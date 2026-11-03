@@ -818,10 +818,8 @@ func (c *Client) fetchPipelineJobs(ctx context.Context, pipelineID int64) ([]*Jo
 			c.projectID,
 			pipelineID,
 			&gitlab.ListJobsOptions{
-				ListOptions: gitlab.ListOptions{
-					Page:    page,
-					PerPage: perPage,
-				},
+				Page:    page,
+				PerPage: perPage,
 			},
 			gitlab.WithContext(ctx),
 		)

@@ -167,7 +167,7 @@ func (c *Client) pollWorkflowsOnce(
 	checkRuns, _, err := c.client.Checks.ListCheckRunsForRef(
 		pollCtx, c.owner, c.repo, c.prSHA,
 		&github.ListCheckRunsOptions{
-			ListOptions: github.ListOptions{PerPage: maxCheckRunsPerPage},
+			PerPage: maxCheckRunsPerPage,
 		},
 	)
 	if err != nil {
@@ -332,13 +332,11 @@ func calculateJobDuration(job *JobInfo) string {
 // go-github models rate limiting with dedicated types and everything else with
 // ErrorResponse, so both shapes have to be inspected to recover the status code.
 func isTransient(err error) bool {
-	var rateLimit *github.RateLimitError
-	if errors.As(err, &rateLimit) {
+	if _, ok := errors.AsType[*github.RateLimitError](err); ok {
 		return true
 	}
 
-	var abuse *github.AbuseRateLimitError
-	if errors.As(err, &abuse) {
+	if _, ok := errors.AsType[*github.AbuseRateLimitError](err); ok {
 		return true
 	}
 
