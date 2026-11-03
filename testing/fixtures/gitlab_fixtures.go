@@ -27,18 +27,16 @@ const (
 // ValidMergeRequest returns a valid GitLab merge request for testing.
 func ValidMergeRequest() *gitlab.MergeRequest {
 	return &gitlab.MergeRequest{
-		BasicMergeRequest: gitlab.BasicMergeRequest{
-			IID:          defaultMRIID,
-			Title:        "Test Merge Request",
-			State:        "opened",
-			SourceBranch: defaultSourceBr,
-			TargetBranch: "main",
-			SHA:          TestCommitSHA,
-			Author: &gitlab.BasicUser{
-				Username: "testuser",
-			},
-			WebURL: "https://gitlab.com/owner/project/-/merge_requests/123",
+		IID:          defaultMRIID,
+		Title:        "Test Merge Request",
+		State:        "opened",
+		SourceBranch: defaultSourceBr,
+		TargetBranch: "main",
+		SHA:          TestCommitSHA,
+		Author: &gitlab.BasicUser{
+			Username: "testuser",
 		},
+		WebURL: "https://gitlab.com/owner/project/-/merge_requests/123",
 	}
 }
 

@@ -351,10 +351,8 @@ func (c *Client) fetchJobsForRun(ctx context.Context, runID int64) ([]*JobInfo, 
 		jobs, resp, err := c.client.Actions.ListWorkflowJobs(
 			ctx, c.owner, c.repo, runID,
 			&github.ListWorkflowJobsOptions{
-				ListOptions: github.ListOptions{
-					Page:    page,
-					PerPage: perPage,
-				},
+				Page:    page,
+				PerPage: perPage,
 			},
 		)
 		if err != nil {

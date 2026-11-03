@@ -26,8 +26,7 @@ func TestSwitchBranch_WithCancelledContext(t *testing.T) {
 	}
 
 	// Check if it's a GitTimeoutError
-	var timeoutErr *git.GitTimeoutError
-	if errors.As(err, &timeoutErr) {
+	if timeoutErr, ok := errors.AsType[*git.GitTimeoutError](err); ok {
 		if timeoutErr.Operation != "switch" {
 			t.Errorf("Expected operation 'switch', got '%s'", timeoutErr.Operation)
 		}
@@ -56,8 +55,7 @@ func TestPull_WithCancelledContext(t *testing.T) {
 	}
 
 	// Check if it's a GitTimeoutError
-	var timeoutErr *git.GitTimeoutError
-	if errors.As(err, &timeoutErr) {
+	if timeoutErr, ok := errors.AsType[*git.GitTimeoutError](err); ok {
 		if timeoutErr.Operation != "pull" {
 			t.Errorf("Expected operation 'pull', got '%s'", timeoutErr.Operation)
 		}
@@ -86,8 +84,7 @@ func TestDeleteBranch_WithCancelledContext(t *testing.T) {
 	}
 
 	// Check if it's a GitTimeoutError
-	var timeoutErr *git.GitTimeoutError
-	if errors.As(err, &timeoutErr) {
+	if timeoutErr, ok := errors.AsType[*git.GitTimeoutError](err); ok {
 		if timeoutErr.Operation != "delete branch" {
 			t.Errorf("Expected operation 'delete branch', got '%s'", timeoutErr.Operation)
 		}
@@ -116,8 +113,7 @@ func TestFetchAndPrune_WithCancelledContext(t *testing.T) {
 	}
 
 	// Check if it's a GitTimeoutError
-	var timeoutErr *git.GitTimeoutError
-	if errors.As(err, &timeoutErr) {
+	if timeoutErr, ok := errors.AsType[*git.GitTimeoutError](err); ok {
 		if timeoutErr.Operation != "fetch and prune" {
 			t.Errorf("Expected operation 'fetch and prune', got '%s'", timeoutErr.Operation)
 		}
